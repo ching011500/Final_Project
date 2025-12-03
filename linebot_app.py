@@ -33,9 +33,14 @@ query_system = CourseQuerySystem(rag_system)
 print("✅ RAG 系統初始化完成")
 
 
-@app.route("/callback", methods=["POST"])
+@app.route("/callback", methods=["GET", "POST"])
 def callback():
     """Linebot webhook callback"""
+    # Line 驗證 Webhook 時會發送 GET 請求
+    if request.method == "GET":
+        return "OK"
+    
+    # 處理 POST 請求（實際的訊息）
     # 取得 X-Line-Signature header
     signature = request.headers.get("X-Line-Signature")
     
@@ -89,7 +94,9 @@ def handle_message(event):
         # 使用 RAG + LLM 查詢課程
         try:
             app.logger.info(f"查詢中：{user_message}")
-            reply_text = query_system.query(user_message, n_results=5)
+            # 可以調整 n_results 來改變顯示的課程數量（預設 10 個，合併後應該會有 5 門不同的課程）
+            n_results = 10
+            reply_text = query_system.query(user_message, n_results=n_results)
             
             # 如果回答太長，截斷並提示
             if len(reply_text) > 2000:  # Line 訊息長度限制
@@ -106,9 +113,13 @@ def handle_message(event):
     )
 
 
-@app.route("/", methods=["GET"])
+@app.route("/", methods=["GET", "POST"])
 def index():
     """健康檢查端點"""
+    # 如果收到 POST 請求（可能是 Line 驗證），重定向到 /callback
+    if request.method == "POST":
+        # 轉發到 callback 處理
+        return callback()
     return "✅ Linebot 服務運行中！"
 
 

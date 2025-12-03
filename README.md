@@ -13,8 +13,11 @@ final_project/
 ├── llm_query.py                # LLM 查詢系統
 ├── utils.py                    # 工具函數（grade/required/時間條件處理）
 ├── linebot_app.py              # Linebot 應用
+├── test_query.py               # 測試查詢系統腳本
+├── check_linebot_setup.py      # Line Bot 環境檢查腳本
 ├── requirements.txt            # Python 依賴
 ├── .env.example                # 環境變數範例
+├── chroma_db/                  # ChromaDB 向量資料庫目錄
 └── README.md                   # 本檔案
 ```
 
@@ -245,6 +248,43 @@ python linebot_app.py
 
 Linebot 會在設定的 PORT（預設 5000）上運行。
 
+### 5. 測試查詢系統
+
+#### 測試所有預設查詢
+
+```bash
+# 啟動虛擬環境
+source venv/bin/activate
+
+# 運行所有測試查詢（共18個）
+python3 test_query.py
+```
+
+#### 測試單一查詢
+
+```bash
+source venv/bin/activate
+
+# 測試單一查詢
+python3 test_query.py "經濟系大一有哪些必修？"
+python3 test_query.py "週二早上 統計大一有什麼必修"
+```
+
+#### 互動式測試
+
+```python
+from rag_system import CourseRAGSystem
+from llm_query import CourseQuerySystem
+
+# 初始化
+rag = CourseRAGSystem()
+query_system = CourseQuerySystem(rag)
+
+# 測試查詢
+answer = query_system.query("經濟系大一有哪些必修？", n_results=5)
+print(answer)
+```
+
 ## 📝 資料處理
 
 ### Grade/Required 對應關係
@@ -334,6 +374,137 @@ Linebot 會在設定的 PORT（預設 5000）上運行。
 - **同步狀態**：✅ 已同步
 - **grade_required_mapping**：100% 包含 JSON 結構
 
+## 🤖 Line Bot 串接指南
+
+### 串接前檢查
+
+使用 `check_linebot_setup.py` 檢查環境是否準備好：
+
+```bash
+source venv/bin/activate
+python3 check_linebot_setup.py
+```
+
+### 步驟 1：建立 Line Bot Channel
+
+1. 前往 [Line Developers Console](https://developers.line.biz/console/)
+2. 建立新的 Provider（如果還沒有）
+3. 建立新的 Channel（選擇 "Messaging API"）
+4. 取得以下資訊：
+   - **Channel Access Token**
+   - **Channel Secret**
+
+### 步驟 2：設定環境變數
+
+確認 `.env` 文件已建立並填入：
+
+```env
+OPENAI_API_KEY=your_openai_api_key
+LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
+LINE_CHANNEL_SECRET=your_line_channel_secret
+PORT=5001
+```
+
+### 步驟 3：本地測試（使用 ngrok）
+
+#### 安裝 ngrok
+
+```bash
+# macOS
+brew install ngrok
+```
+
+#### 啟動 ngrok
+
+```bash
+# 在另一個終端視窗執行
+ngrok http 5001
+```
+
+會顯示類似：
+```
+Forwarding  https://xxxx-xx-xx-xx-xx.ngrok.io -> http://localhost:5001
+```
+
+#### 設定 Line Bot Webhook
+
+1. 前往 Line Developers Console
+2. 選擇你的 Channel
+3. 進入 "Messaging API" 頁籤
+4. 在 "Webhook URL" 欄位填入：`https://xxxx-xx-xx-xx-xx.ngrok.io/callback`
+5. 點擊 "Verify" 驗證（應該會顯示 "Success"）
+6. 啟用 "Use webhook"
+7. **關閉自動回覆訊息**（在 "回應設定" 中）
+
+#### 啟動 Line Bot 服務
+
+```bash
+source venv/bin/activate
+python3 linebot_app.py
+```
+
+應該會看到：
+```
+🔄 初始化 RAG 系統...
+✅ RAG 系統初始化完成
+ * Running on http://0.0.0.0:5001
+```
+
+#### 測試
+
+在 Line 中發送訊息測試：
+- `/start` - 歡迎訊息
+- `/help` - 使用說明
+- `經濟系大一有哪些必修？` - 測試查詢
+
+### 常見問題
+
+#### Webhook 驗證失敗（405 錯誤）
+
+**解決**：
+1. 確認 ngrok 正在運行
+2. 確認 Line Bot 服務已啟動
+3. 確認 Webhook URL 是 `https://your-url.ngrok.io/callback`（注意 `/callback`）
+4. 確認服務已重啟（修改代碼後必須重啟）
+
+#### 收到訊息但沒有回應
+
+**檢查**：
+1. 查看終端視窗的錯誤訊息
+2. 確認環境變數已正確設定
+3. 確認 RAG 系統初始化成功
+4. 確認已關閉 Line Bot 的自動回覆功能
+
+#### Port 5000 被占用
+
+如果遇到 "Port 5000 is in use" 錯誤，可以：
+1. 修改 `.env` 中的 `PORT=5001`（或其他可用 port）
+2. 重新啟動服務
+3. 更新 ngrok：`ngrok http 5001`
+
+### 部署到伺服器（可選）
+
+#### 使用 Heroku
+
+1. 建立 `Procfile`：
+   ```
+   web: python linebot_app.py
+   ```
+2. 部署：
+   ```bash
+   heroku create your-app-name
+   git push heroku main
+   heroku config:set LINE_CHANNEL_ACCESS_TOKEN=your_token
+   heroku config:set LINE_CHANNEL_SECRET=your_secret
+   heroku config:set OPENAI_API_KEY=your_key
+   ```
+
+#### 使用其他平台
+
+- **Render**：支援 Python，設定環境變數即可
+- **Railway**：支援 Python，自動部署
+- **AWS/GCP**：需要設定 EC2/Cloud Run 等
+
 ## 🔧 開發與維護
 
 ### 更新資料庫
@@ -356,6 +527,31 @@ Linebot 會在設定的 PORT（預設 5000）上運行。
 - **過濾邏輯**：修改 `llm_query.py` 和 `utils.py` 中的相關函數
 - **Grade/Required 處理**：修改 `utils.py` 中的工具函數
 - **時間條件處理**：修改 `utils.py` 中的 `extract_time_from_query` 和 `check_time_match` 函數
+- **Linebot 功能**：修改 `linebot_app.py` 中的回應格式、指令、錯誤處理等
+
+### 部署後修改
+
+#### 可以修改的部分（不需要重建向量資料庫）
+
+- 修改查詢邏輯
+- 調整過濾條件
+- 修改 LLM prompt
+- 調整混合檢索權重
+- 修改 Linebot 回應格式
+- 調整顯示的課程數量（修改 `linebot_app.py` 中的 `n_results`）
+
+#### 需要重建向量資料庫的情況
+
+- 修改了資料庫結構
+- 更新了課程資料（執行 `web_scraping.ipynb`）
+- 修改了 `_create_course_text()` 方法（影響向量化內容）
+
+重建方法：
+```python
+from rag_system import CourseRAGSystem
+rag = CourseRAGSystem()
+rag.build_vector_database()  # 這會產生 OpenAI API 費用
+```
 
 ### 調整混合檢索權重
 
@@ -411,6 +607,16 @@ rag.bm25_weight = 0.3
 - **自然語言**：支援「大一」、「大二」等自然語言
 - **格式多樣**：支援「統計大一」、「統計系大一」等格式
 - **碩士班支援**：支援「資工碩一」、「資工系碩一」等格式
+
+## 📝 課程顯示邏輯
+
+系統會自動合併相同課程名稱和相同上課時間的課程：
+
+- **合併顯示**：如果多筆課程的「課程名稱相同」且「上課時間完全相同」，會合併為一筆顯示
+- **教師顯示**：合併時，授課教師欄位會顯示所有教師，格式為「教師A & 教師B & 教師C 同時段皆有開課」
+- **課程代碼**：合併時會列出所有課程代碼，用逗號分隔
+- **分開顯示**：如果課程名稱相同但上課時間不同，則分開顯示
+- **數量計算**：課程數量按照合併後的課程名稱計算，不是按照原始資料筆數
 
 ## 📄 授權
 
