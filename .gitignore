@@ -1,4 +1,5 @@
 # 環境變數檔案
+.env
 .env.example
 
 # Python
