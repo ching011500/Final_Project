@@ -487,6 +487,31 @@ class CourseQuerySystem:
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
         context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
         
+        # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
+        if time_condition.get('day') or time_condition.get('period'):
+            groups = self._group_courses(relevant_courses)
+            lines = ["嗨！以下是符合你時間條件的課程：\n"]
+            for g in groups:
+                title_suffix = ""
+                if g['schedule']:
+                    title_suffix += f"（{g['schedule']}）"
+                if g['dept']:
+                    title_suffix += f"［{g['dept']}］"
+                lines.append(f"課程名稱：{g['name']}{title_suffix}")
+                if g['serials']:
+                    lines.append(f"課程代碼：{', '.join(g['serials'])}")
+                if g['teachers']:
+                    lines.append(f"授課教師：{' & '.join(sorted(g['teachers']))}")
+                if g['required']:
+                    lines.append(f"必選修：{g['required']}")
+                if g['schedule']:
+                    lines.append(f"上課時間：{g['schedule']}")
+                if g['grade']:
+                    lines.append(f"年級：{g['grade']}")
+                lines.append("")  # blank line between courses
+            lines.append(f"共找到 {len(groups)} 門課程。")
+            return "\n".join(lines)
+        
         # 4. 建立 prompt
         system_prompt = """你是一個友善的課程查詢助手，專門協助學生查詢國立臺北大學的課程資訊。
 
@@ -655,12 +680,57 @@ class CourseQuerySystem:
         if not courses:
             return "未找到相關課程。"
         
-        # 先依「課程名稱 + 上課時間 + 系所（含進修標記）」分組，避免不同時段或進修部/日間被合併
+        grouped = self._group_courses(courses)
+        context_parts = []
+        for i, info in enumerate(grouped, 1):
+            context_parts.append(f"\n【課程 {i}】")
+            title_suffix = ""
+            if info['schedule']:
+                title_suffix += f"（{info['schedule']}）"
+            if info['dept']:
+                title_suffix += f"［{info['dept']}］"
+            if info['name']:
+                context_parts.append(f"課程名稱：{info['name']}{title_suffix}")
+            if info['serials']:
+                context_parts.append(f"課程代碼：{', '.join(info['serials'])}")
+            if info['teachers']:
+                context_parts.append(f"授課教師：{' & '.join(sorted(info['teachers']))}")
+            if info['dept']:
+                context_parts.append(f"系所：{info['dept']}")
+            if info['required']:
+                context_parts.append(f"必選修：{info['required']}")
+            if info['schedule']:
+                context_parts.append(f"上課時間：{info['schedule']}")
+            if info['grade']:
+                context_parts.append(f"年級：{info['grade']}")
+            document_combined = "\n".join(info['documents'])
+            show_required = info['required']
+            if not show_required and '必選修：' in document_combined:
+                import re
+                match = re.search(r'必選修：([^\n]+)', document_combined)
+                if match:
+                    show_required = match.group(1).strip()
+            if not target_grade:
+                if show_required:
+                    if '必' in show_required:
+                        context_parts.append(f"✅ 這是必修課程（必選修：{show_required}）")
+                    elif '選' in show_required and '必' not in show_required:
+                        context_parts.append(f"📝 這是選修課程（必選修：{show_required}）")
+            else:
+                if show_required:
+                    if '必' in show_required:
+                        context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
+                    elif '選' in show_required and '必' not in show_required:
+                        context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
+            context_parts.append(document_combined)
+        return "\n".join(context_parts)
+
+    def _group_courses(self, courses: List[Dict]) -> List[Dict]:
+        """依 課名+時間+系所 分組，確保不同時段/進修部不被合併"""
         def normalize_dept(d):
             return d.strip() if d else ""
         def normalize_sched(s):
             return s.strip() if s else ""
-        
         grouped = {}
         for course in courses:
             metadata = course.get('metadata', {}) or {}
@@ -672,7 +742,6 @@ class CourseQuerySystem:
             teacher = metadata.get('teacher', '')
             required = metadata.get('required', '')
             grade = metadata.get('grade', '')
-            # 如果缺時間，嘗試從 document 抽
             if not schedule and document:
                 import re
                 m = re.search(r'上課時間：([^\n]+)', document)
@@ -695,70 +764,11 @@ class CourseQuerySystem:
             if teacher:
                 grouped[key]['teachers'].add(teacher)
             grouped[key]['documents'].append(document)
-            # 保留必選修與年級
             if required and not grouped[key]['required']:
                 grouped[key]['required'] = required
             if grade and not grouped[key]['grade']:
                 grouped[key]['grade'] = grade
-        
-        context_parts = []
-        for i, (key, info) in enumerate(grouped.items(), 1):
-            name = info['name']
-            schedule = info['schedule']
-            dept = info['dept']
-            serials = info['serials']
-            teachers = info['teachers']
-            required = info['required']
-            grade = info['grade']
-            
-            context_parts.append(f"\n【課程 {i}】")
-            title_suffix = ""
-            if schedule:
-                title_suffix += f"（{schedule}）"
-            if dept:
-                title_suffix += f"［{dept}］"
-            if name:
-                context_parts.append(f"課程名稱：{name}{title_suffix}")
-            if serials:
-                context_parts.append(f"課程代碼：{', '.join(serials)}")
-            if teachers:
-                context_parts.append(f"授課教師：{' & '.join(sorted(teachers))}")
-            if dept:
-                context_parts.append(f"系所：{dept}")
-            if required:
-                context_parts.append(f"必選修：{required}")
-            if schedule:
-                context_parts.append(f"上課時間：{schedule}")
-            if grade:
-                context_parts.append(f"年級：{grade}")
-            
-            # 必選修標示（沿用原邏輯）
-            document_combined = "\n".join(info['documents'])
-            show_required = required
-            if not show_required and '必選修：' in document_combined:
-                import re
-                match = re.search(r'必選修：([^\n]+)', document_combined)
-                if match:
-                    show_required = match.group(1).strip()
-            if not target_grade:
-                if show_required:
-                    if '必' in show_required:
-                        context_parts.append(f"✅ 這是必修課程（必選修：{show_required}）")
-                    elif '選' in show_required and '必' not in show_required:
-                        context_parts.append(f"📝 這是選修課程（必選修：{show_required}）")
-            else:
-                mapping_json = (courses[0].get('metadata', {}) or {}).get('grade_required_mapping', '')
-                # 簡化：若有 target_grade，仍盡量標示必/選
-                if show_required:
-                    if '必' in show_required:
-                        context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
-                    elif '選' in show_required and '必' not in show_required:
-                        context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
-            
-            # 附上原文件片段以供 LLM 參考
-            context_parts.append(document_combined)
-        
-        return "\n".join(context_parts)
+        return list(grouped.values())
 
 
 if __name__ == "__main__":
