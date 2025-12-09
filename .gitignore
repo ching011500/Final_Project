@@ -27,9 +27,6 @@ wheels/
 .installed.cfg
 *.egg
 
-# ChromaDB
-chroma_db/
-
 # Jupyter Notebook
 .ipynb_checkpoints
 
