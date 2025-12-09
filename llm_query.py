@@ -120,6 +120,10 @@ class CourseQuerySystem:
         else:
             # 沒有系所資訊，使用原始查詢
             search_queries.append(user_question)
+
+        # 額外啟發式：如果使用者問「體育課」且尚未解析到系所，預設系所包含「體育」
+        if not target_dept and ('體育課' in user_question or '體育' in user_question):
+            target_dept = '體育'
         
         # 選擇最佳搜尋策略
         # 如果有特定 grade，使用包含 grade 和必選修的關鍵詞組合
@@ -495,6 +499,15 @@ class CourseQuerySystem:
                 for c in relevant_courses:
                     dept = (c.get('metadata', {}) or {}).get('dept', '')
                     if target_dept in dept:
+                        filtered.append(c)
+                if filtered:
+                    relevant_courses = filtered
+            # 如果沒有明確系所，但關鍵詞有「體育」，也只保留系所含「體育」
+            elif '體育' in user_question:
+                filtered = []
+                for c in relevant_courses:
+                    dept = (c.get('metadata', {}) or {}).get('dept', '')
+                    if '體育' in dept:
                         filtered.append(c)
                 if filtered:
                     relevant_courses = filtered
