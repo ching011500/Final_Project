@@ -371,6 +371,19 @@ class CourseQuerySystem:
                     relevant_courses = relaxed[:n_results * 2]
                 else:
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
+        else:
+            # 沒有系所/年級/必修條件，但有時間條件時也要過濾時間
+            if time_condition.get('day') or time_condition.get('period'):
+                time_filtered = []
+                for course in relevant_courses:
+                    metadata = course.get('metadata', {})
+                    schedule = metadata.get('schedule', '')
+                    if schedule and check_time_match(schedule, time_condition):
+                        time_filtered.append(course)
+                if time_filtered:
+                    relevant_courses = time_filtered[:n_results * 2]
+                else:
+                    return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         
         # 3. 建立 context（相關課程資訊）
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級

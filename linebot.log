@@ -12,10 +12,3 @@
  * Running on http://127.0.0.1:5001
  * Running on http://192.168.0.12:5001
 [33mPress CTRL+C to quit[0m
-Building prefix dict from the default dictionary ...
-Loading model from cache /var/folders/z9/zxb4ml5x6ksc4klvnjlm7cwc0000gn/T/jieba.cache
-Loading model cost 0.319 seconds.
-Prefix dict has been built successfully.
-/Users/yuching/Documents/大四/人工智慧導論/final_project/linebot_app.py:137: LineBotSdkDeprecatedIn30: Call to deprecated method reply_message. (Use 'from linebot.v3.messaging import MessagingApi' and 'MessagingApi(...).reply_message(...)' instead. See https://github.com/line/line-bot-sdk-python/blob/master/README.rst for more details.) -- Deprecated since version 3.0.0.
-  line_bot_api.reply_message(
-127.0.0.1 - - [09/Dec/2025 15:26:59] "POST /callback HTTP/1.1" 200 -
