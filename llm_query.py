@@ -489,6 +489,16 @@ class CourseQuerySystem:
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
         if time_condition.get('day') or time_condition.get('period'):
+            # 進一步依系所過濾（例如「體育課」應只留系所含「體育」）
+            if target_dept:
+                filtered = []
+                for c in relevant_courses:
+                    dept = (c.get('metadata', {}) or {}).get('dept', '')
+                    if target_dept in dept:
+                        filtered.append(c)
+                if filtered:
+                    relevant_courses = filtered
+
             groups = self._group_courses(relevant_courses)
             lines = ["嗨！以下是符合你時間條件的課程：\n"]
             for g in groups:
