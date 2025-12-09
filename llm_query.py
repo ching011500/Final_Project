@@ -173,19 +173,20 @@ class CourseQuerySystem:
         # 提取時間條件
         time_condition = extract_time_from_query(user_question)
         
-        # 擴大搜尋範圍，取得更多候選課程（特別是針對 grade 查詢）
-        # 如果有必選修要求，也需要擴大範圍以確保找到所有相關課程
-        # 對於碩士班必修查詢，進一步擴大範圍以找到「專題研討」等跨系所課程
+        # 擴大搜尋範圍，取得更多候選課程
+        # 時間條件與年級/必修/系所都會適度放大，避免漏掉跨時段課
         if target_grade:
             if '碩' in target_grade and need_required_filter and target_required == '必':
-                # 碩士班必修查詢，需要更大的搜尋範圍以找到跨系所課程（如「專題研討」）
                 search_n_results = n_results * 20
             else:
-                search_n_results = n_results * 15  # 針對 grade 查詢，擴大範圍
+                search_n_results = n_results * 15
         elif need_required_filter:
-            search_n_results = n_results * 12  # 針對必選修查詢，擴大範圍
+            search_n_results = n_results * 12
         else:
             search_n_results = n_results * 5
+        # 如果有時間條件，進一步放大
+        if time_condition.get('day') or time_condition.get('period'):
+            search_n_results = max(search_n_results, n_results * 10)
         
         # 對於碩士班必修查詢，也使用「專題研討」或「Seminar」作為搜尋關鍵詞
         # 因為有些課程（如「專題研討」）的系所可能不同，但年級中包含目標年級
@@ -385,6 +386,68 @@ class CourseQuerySystem:
                 else:
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         
+        # 時間條件補強：若結果太少，再全量掃描一次 collection 依時間/系所（與必修需求）補充
+        if time_condition.get('day') or time_condition.get('period'):
+            if len(relevant_courses) < n_results:
+                try:
+                    total = self.rag_system.collection.count()
+                    batch_size = 500
+                    seen_ids = set()
+                    for c in relevant_courses:
+                        md = c.get('metadata', {})
+                        seen_ids.add(md.get('serial', '') + md.get('schedule', ''))
+
+                    def process_batch(docs, metas):
+                        nonlocal relevant_courses, seen_ids
+                        for doc, md in zip(docs, metas):
+                            schedule = md.get('schedule', '')
+                            if not schedule:
+                                continue
+                            # 時間匹配
+                            if not check_time_match(schedule, time_condition):
+                                continue
+                            # 系所匹配（若有）
+                            if target_dept:
+                                if target_dept not in md.get('dept', ''):
+                                    continue
+                            # 必修匹配（若有）
+                            if need_required_filter and target_required:
+                                req = md.get('required', '')
+                                if target_required == '必' and '必' not in req:
+                                    continue
+                                if target_required == '選' and ('選' not in req or '必' in req):
+                                    continue
+                            # 去重
+                            key = md.get('serial', '') + schedule
+                            if key in seen_ids:
+                                continue
+                            seen_ids.add(key)
+                            relevant_courses.append({
+                                'document': doc,
+                                'metadata': md,
+                                'distance': None,
+                                'similarity': 0.0,
+                                'embedding_score': 0.0,
+                                'bm25_score': 0.0,
+                                'hybrid_score': 0.0
+                            })
+
+                    # 分批取出，避免 get() 預設只取少量
+                    for offset in range(0, total, batch_size):
+                        all_results = self.rag_system.collection.get(
+                            include=['documents', 'metadatas'],
+                            limit=batch_size,
+                            offset=offset
+                        )
+                        docs = all_results.get('documents', [])
+                        metas = all_results.get('metadatas', [])
+                        if docs and metas:
+                            process_batch(docs, metas)
+                        if len(relevant_courses) >= n_results * 3:
+                            break
+                except Exception:
+                    pass
+
         # 3. 建立 context（相關課程資訊）
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
         context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
@@ -419,7 +482,7 @@ class CourseQuerySystem:
    - 顯示所有對任何組別來說是必修的課程
    - 如果課程對不同組別有不同的必選修狀態，可以說明這一點
 5. **課程顯示邏輯（非常重要，必須嚴格遵守）**：
-   - **強制要求**：在顯示課程之前，必須先按照「課程名稱 + 上課時間」進行分組
+   - **強制要求**：在顯示課程之前，必須先按照「課程名稱 + 上課時間 + 系所（含日間/進修/進修部字樣）」進行分組，日間與進修部絕對不可合併
    - **優先順序**：先顯示課程名稱不同的課程
    - **合併顯示規則（必須執行）**：
      * 如果多筆課程的「課程名稱相同」且「上課時間完全相同」，則**必須合併為一筆顯示**
@@ -514,6 +577,9 @@ class CourseQuerySystem:
 - 合併時，授課教師欄位**必須**使用「&」連接所有教師，並加上「同時段皆有開課」
 - 課程代碼**必須**列出所有，用逗號分隔
 - **這是強制要求，不是建議！**
+- 如果課程名稱相同但「上課時間不同」，**一定要分開顯示**，絕對不能合併不同時段！請務必檢查每筆的「上課時間」後再決定是否合併。
+- 為避免誤合併，若課程名稱相同但時間不同，請在輸出時於課程名稱後補充該時間，例如「體育：排球（每週三5~6）」與「體育：排球（每週三7~8）」分開列。
+- **進修部/日間分開**：如果系所或課程標記有「進修」或「(進修)」，即使課程名稱與時間相同，也要與日間課程分開列出，不得合併。
 
 - 如果資料中有課程，請**嚴格按照上述規則**組織和顯示課程資訊
 - 如果資料中沒有課程，請告訴使用者沒有找到
@@ -560,6 +626,16 @@ class CourseQuerySystem:
             # 從 metadata 中取得資訊
             metadata = course.get('metadata', {})
             dept = metadata.get('dept', '')
+            schedule = metadata.get('schedule', '') or ''
+            name = metadata.get('name', '')
+            # 在名稱後附上時間與系所後綴，避免 LLM 誤合併不同時段或不同系所
+            title_suffix = ""
+            if schedule:
+                title_suffix += f"（{schedule}）"
+            if dept:
+                title_suffix += f"［{dept}］"
+            if name:
+                context_parts.append(f"課程名稱：{name}{title_suffix}")
             
             # 從 document 文字中提取必選修資訊
             document = course.get('document', '')
