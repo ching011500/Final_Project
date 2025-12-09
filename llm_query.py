@@ -314,8 +314,13 @@ class CourseQuerySystem:
                                 grade_required = target_required  # 設置 grade_required 以便後續使用
                                 break
                     elif need_required_filter and not target_grade:
-                        # 沒有 target_grade，但有必選修要求，使用傳統方式檢查
-                        if '必選修：' in document:
+                        # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
+                        meta_required = metadata.get('required', '')
+                        if target_required == '必' and meta_required and '必' in meta_required:
+                            is_required = True
+                        elif target_required == '選' and meta_required and ('選' in meta_required and '必' not in meta_required):
+                            is_required = True
+                        elif '必選修：' in document:
                             required_match = re.search(r'必選修：([^\n]+)', document)
                             if required_match:
                                 required_text = required_match.group(1).strip()
@@ -341,31 +346,30 @@ class CourseQuerySystem:
                 if dept_matches and is_required and time_matches:
                     filtered_courses.append(course)
             
-            # 如果過濾後還有結果，使用過濾後的結果
-            # 增加顯示數量，確保合併後能顯示足夠的課程（至少 n_results 門不同的課程）
+            # 如果過濾後有結果，優先使用過濾後的結果（取多一點以便合併）
             if filtered_courses:
-                # 取更多結果，因為合併後數量會減少
-                relevant_courses = filtered_courses[:n_results * 2]  # 取更多，確保合併後有足夠的課程
-            elif need_required_filter or target_dept or target_grade:
-                # 如果進行了過濾但沒有結果，嘗試放寬條件
-                # 只過濾系所，不過濾必選修
-                if target_dept and not target_grade:
-                    relaxed_courses = []
-                    for course in relevant_courses[:n_results * 2]:
-                        document = course.get('document', '')
-                        metadata = course.get('metadata', {})
-                        dept = metadata.get('dept', '')
-                        
-                        if target_dept in dept:
-                            relaxed_courses.append(course)
+                relevant_courses = filtered_courses[:n_results * 2]
+            else:
+                # 放寬策略：保留系所與時間條件，放寬必選修/年級過濾，避免空結果
+                relaxed = []
+                for course in relevant_courses:
+                    metadata = course.get('metadata', {})
+                    dept = metadata.get('dept', '')
+                    schedule = metadata.get('schedule', '')
                     
-                    if relaxed_courses:
-                        relevant_courses = relaxed_courses[:n_results]
-                    else:
-                        # 如果還是沒有結果，直接返回
-                        return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
+                    dept_ok = True
+                    if target_dept:
+                        dept_ok = target_dept in dept
+                    time_ok = True
+                    if time_condition.get('day') or time_condition.get('period'):
+                        time_ok = check_time_match(schedule, time_condition) if schedule else False
+                    
+                    if dept_ok and time_ok:
+                        relaxed.append(course)
+                
+                if relaxed:
+                    relevant_courses = relaxed[:n_results * 2]
                 else:
-                    # 如果進行了嚴格過濾但沒有結果，直接返回
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         
         # 3. 建立 context（相關課程資訊）
@@ -381,7 +385,7 @@ class CourseQuerySystem:
 3. 只能使用「相關課程資料」中實際存在的課程，不能自己創造課程
 
 回答時的指導原則：
-1. 使用繁體中文回答
+1. 使用繁體中文回答，語氣自然、像跟同學聊天，簡短問候開頭也可以（但不要太長）
 2. 仔細閱讀「相關課程資料」中的每一筆課程資訊
 3. 仔細閱讀課程資料中的必選修資訊：
    - 重要：課程的必選修狀態可能因不同的年級/組別而不同

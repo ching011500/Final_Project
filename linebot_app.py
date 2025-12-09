@@ -3,6 +3,8 @@ Linebot 應用程式：整合 RAG 與 LLM 的課程查詢 Linebot
 """
 import os
 from dotenv import load_dotenv
+from collections import deque
+import re
 
 # 載入環境變數
 load_dotenv()
@@ -31,6 +33,10 @@ print("🔄 初始化 RAG 系統...")
 rag_system = CourseRAGSystem()
 query_system = CourseQuerySystem(rag_system)
 print("✅ RAG 系統初始化完成")
+
+# 避免重複回覆：記錄近期處理過的 message_id
+RECENT_MESSAGE_IDS = deque(maxlen=200)
+RECENT_MESSAGE_SET = set()
 
 
 @app.route("/callback", methods=["GET", "POST"])
@@ -63,8 +69,21 @@ def handle_message(event):
     """處理文字訊息"""
     user_message = event.message.text
     user_id = event.source.user_id
+    msg_id = event.message.id
     
     app.logger.info(f"收到訊息 from {user_id}: {user_message}")
+
+    # 重複訊息防護（Line 可能重送，或程式重啟時短時間內重複處理）
+    if msg_id in RECENT_MESSAGE_SET:
+        app.logger.info(f"忽略重複訊息 message_id={msg_id}")
+        return
+    RECENT_MESSAGE_IDS.append(msg_id)
+    RECENT_MESSAGE_SET.add(msg_id)
+    # 清理過期的 id（保持集合大小與 deque 同步）
+    if len(RECENT_MESSAGE_SET) > 300:
+        while len(RECENT_MESSAGE_IDS) > 200:
+            old_id = RECENT_MESSAGE_IDS.popleft()
+            RECENT_MESSAGE_SET.discard(old_id)
     
     # 處理特殊指令
     if user_message.strip() == "/help":
@@ -93,15 +112,23 @@ def handle_message(event):
     else:
         # 使用 RAG + LLM 查詢課程
         try:
-            app.logger.info(f"查詢中：{user_message}")
+            # 前處理：移除客套詞，降低干擾
+            cleaned_message = user_message.strip()
+            # 先移除較長的前綴，再移除常見客套詞與「查詢/找」
+            cleaned_message = re.sub(r'^(請幫我查詢|請幫我找|幫我查詢|幫我找|麻煩查詢|麻煩找)\s*', '', cleaned_message)
+            cleaned_message = re.sub(r'^(請幫我|麻煩你|麻煩|請|幫我|幫忙|幫忙查詢|幫忙找)\s*', '', cleaned_message)
+            cleaned_message = re.sub(r'^(查詢|查找|找)\s*', '', cleaned_message)
+            app.logger.info(f"查詢中：{user_message} -> 清理後：{cleaned_message}")
             # 可以調整 n_results 來改變顯示的課程數量（預設 10 個，合併後應該會有 5 門不同的課程）
             n_results = 10
-            reply_text = query_system.query(user_message, n_results=n_results)
+            reply_text = query_system.query(cleaned_message, n_results=n_results)
             
             # 如果回答太長，截斷並提示
             if len(reply_text) > 2000:  # Line 訊息長度限制
                 reply_text = reply_text[:1900] + "\n\n...（回答過長，已截斷）"
-        
+            # 記錄回覆內容（避免過長只記錄前 300 字）
+            app.logger.info(f"回覆內容（前300字）：{reply_text[:300]}")
+
         except Exception as e:
             app.logger.error(f"查詢錯誤：{str(e)}")
             reply_text = f"❌ 查詢時發生錯誤，請稍後再試。\n錯誤訊息：{str(e)}"
@@ -135,5 +162,6 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # 生產模式請關閉 debug，避免雙進程造成重複回覆
+    app.run(host="0.0.0.0", port=port, debug=False)
 
