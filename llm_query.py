@@ -318,41 +318,15 @@ class CourseQuerySystem:
                 metadata = course.get('metadata', {})
                 dept = metadata.get('dept', '')
                 
-                # 檢查系所條件
+                # 檢查系所條件：只依賴年級欄位，不依賴開課系所
                 dept_matches = True
                 if target_dept:
-                    # 處理「系」和「碩」的差異
-                    # 例如：target_dept 是「資工碩」，dept 是「資工碩」→ 匹配
-                    # 例如：target_dept 是「資工碩」，dept 是「資工系碩」→ 也應該匹配
-                    # 例如：target_dept 是「資工系碩」，dept 是「資工碩」→ 也應該匹配
-                    if target_dept in dept:
-                        dept_matches = True
-                    elif '碩' in target_dept and '碩' in dept:
-                        # 處理碩士班格式差異
-                        target_dept_clean = target_dept.replace('系', '').replace('碩', '')
-                        dept_clean = dept.replace('系', '').replace('碩', '')
-                        dept_matches = target_dept_clean in dept_clean or dept_clean in target_dept_clean
-                    else:
+                    grade_text = metadata.get('grade', '')
+                    # 只檢查年級欄位是否包含目標系所
+                    dept_matches = grade_has_target_dept(grade_text, target_dept)
+                    # 如果年級欄位為空，則不符合條件（不應該出現這種情況，但以防萬一）
+                    if not grade_text:
                         dept_matches = False
-                    
-                    # 如果系所不匹配，但年級/年級列表中有包含該系所，也允許通過（處理跨系開課）
-                    # 例如課程屬於統計系，但 grade 欄位含「通訊系2」，仍應回傳
-                    if not dept_matches:
-                        grade_text = metadata.get('grade', '')
-                        if grade_has_target_dept(grade_text, target_dept):
-                            dept_matches = True
-                    
-                    # 特殊情況：如果系所不匹配，但年級匹配且是必修，也應該包含
-                    # 例如：「專題研討」的系所是「電機碩」，但年級中包含「資工碩1」且是必修
-                    if not dept_matches and target_grade:
-                        # 檢查年級是否匹配
-                        mapping_json = metadata.get('grade_required_mapping', '')
-                        if mapping_json:
-                            course_dict = {'grade_required_mapping': mapping_json}
-                            grade_required = check_grade_required_from_json(course_dict, target_grade)
-                            # 如果年級匹配且是必修，且符合必選修要求，則通過
-                            if grade_required and (not target_required or grade_required == target_required):
-                                dept_matches = True  # 允許通過
                 
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
@@ -457,15 +431,17 @@ class CourseQuerySystem:
                 relevant_courses = filtered_courses[:n_results * 2]
             else:
                 # 放寬策略：保留系所與時間條件，放寬必選修/年級過濾，避免空結果
+                # 但系所條件仍以年級欄位為準
                 relaxed = []
                 for course in relevant_courses:
                     metadata = course.get('metadata', {})
-                    dept = metadata.get('dept', '')
+                    grade_text = metadata.get('grade', '')
                     schedule = metadata.get('schedule', '')
                     
                     dept_ok = True
                     if target_dept:
-                        dept_ok = target_dept in dept
+                        # 只檢查年級欄位
+                        dept_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
                     time_ok = True
                     if time_condition.get('day') or time_condition.get('period'):
                         time_ok = check_time_match(schedule, time_condition) if schedule else False
@@ -511,12 +487,11 @@ class CourseQuerySystem:
                             # 時間匹配
                             if not check_time_match(schedule, time_condition):
                                 continue
-                            # 系所匹配（若有）
+                            # 系所匹配（若有）：只依賴年級欄位
                             if target_dept:
-                                dept_text = md.get('dept', '')
                                 grade_text = md.get('grade', '')
-                                # 系所直接匹配或 grade 欄位包含該系所（跨系共同必選修）
-                                if not (target_dept in dept_text or grade_has_target_dept(grade_text, target_dept)):
+                                dept_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
+                                if not dept_ok:
                                     continue
                             # 必修匹配（若有）
                             if need_required_filter and target_required:
@@ -562,15 +537,15 @@ class CourseQuerySystem:
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
         if time_condition.get('day') or time_condition.get('period'):
-            # 進一步依系所過濾（例如「體育課」應只留系所含「體育」）
+            # 進一步依系所過濾：只依賴年級欄位
             if target_dept:
                 filtered = []
                 for c in relevant_courses:
                     md = (c.get('metadata', {}) or {})
-                    dept = md.get('dept', '')
                     grade_text = md.get('grade', '')
-                    # 允許系所直接匹配，或年級欄位包含該系所（跨系共同開課）
-                    if target_dept in dept or grade_has_target_dept(grade_text, target_dept):
+                    # 只檢查年級欄位
+                    dept_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
+                    if dept_ok:
                         filtered.append(c)
                 if filtered:
                     relevant_courses = filtered
