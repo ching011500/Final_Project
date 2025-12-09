@@ -210,7 +210,42 @@ class CourseQuerySystem:
                     seen_serials.add(serial)
             relevant_courses = combined_results
         else:
-            relevant_courses = self.rag_system.search_courses(primary_search_query, n_results=search_n_results)
+            # 如果有明確的時間條件，直接全庫掃描以免漏抓不同時段
+            if time_condition.get('day') or time_condition.get('period'):
+                relevant_courses = []
+                try:
+                    total = self.rag_system.collection.count()
+                    batch_size = 500
+                    for offset in range(0, total, batch_size):
+                        all_results = self.rag_system.collection.get(
+                            include=['documents', 'metadatas'],
+                            limit=batch_size,
+                            offset=offset
+                        )
+                        docs = all_results.get('documents', [])
+                        metas = all_results.get('metadatas', [])
+                        for doc, md in zip(docs, metas):
+                            schedule = md.get('schedule', '')
+                            if not schedule:
+                                continue
+                            if not check_time_match(schedule, time_condition):
+                                continue
+                            relevant_courses.append({
+                                'document': doc,
+                                'metadata': md,
+                                'distance': None,
+                                'similarity': 0.0,
+                                'embedding_score': 0.0,
+                                'bm25_score': 0.0,
+                                'hybrid_score': 0.0
+                            })
+                    # 若沒有找到，退回混合檢索
+                    if not relevant_courses:
+                        relevant_courses = self.rag_system.search_courses(primary_search_query, n_results=search_n_results)
+                except Exception:
+                    relevant_courses = self.rag_system.search_courses(primary_search_query, n_results=search_n_results)
+            else:
+                relevant_courses = self.rag_system.search_courses(primary_search_query, n_results=search_n_results)
         
         filtered_courses = []  # 初始化 filtered_courses
         
@@ -580,6 +615,7 @@ class CourseQuerySystem:
 - 如果課程名稱相同但「上課時間不同」，**一定要分開顯示**，絕對不能合併不同時段！請務必檢查每筆的「上課時間」後再決定是否合併。
 - 為避免誤合併，若課程名稱相同但時間不同，請在輸出時於課程名稱後補充該時間，例如「體育：排球（每週三5~6）」與「體育：排球（每週三7~8）」分開列。
 - **進修部/日間分開**：如果系所或課程標記有「進修」或「(進修)」，即使課程名稱與時間相同，也要與日間課程分開列出，不得合併。
+- **特別強調**：同名但不同時段的課程，課程代碼只能列出該時段的代碼，絕對不可把不同時段的代碼放在同一筆裡。
 
 - 如果資料中有課程，請**嚴格按照上述規則**組織和顯示課程資訊
 - 如果資料中沒有課程，請告訴使用者沒有找到
@@ -619,16 +655,63 @@ class CourseQuerySystem:
         if not courses:
             return "未找到相關課程。"
         
-        context_parts = []
-        for i, course in enumerate(courses, 1):
-            context_parts.append(f"\n【課程 {i}】")
-            
-            # 從 metadata 中取得資訊
-            metadata = course.get('metadata', {})
-            dept = metadata.get('dept', '')
-            schedule = metadata.get('schedule', '') or ''
+        # 先依「課程名稱 + 上課時間 + 系所（含進修標記）」分組，避免不同時段或進修部/日間被合併
+        def normalize_dept(d):
+            return d.strip() if d else ""
+        def normalize_sched(s):
+            return s.strip() if s else ""
+        
+        grouped = {}
+        for course in courses:
+            metadata = course.get('metadata', {}) or {}
+            document = course.get('document', '') or ''
             name = metadata.get('name', '')
-            # 在名稱後附上時間與系所後綴，避免 LLM 誤合併不同時段或不同系所
+            dept = normalize_dept(metadata.get('dept', ''))
+            schedule = normalize_sched(metadata.get('schedule', ''))
+            serial = metadata.get('serial', '')
+            teacher = metadata.get('teacher', '')
+            required = metadata.get('required', '')
+            grade = metadata.get('grade', '')
+            # 如果缺時間，嘗試從 document 抽
+            if not schedule and document:
+                import re
+                m = re.search(r'上課時間：([^\n]+)', document)
+                if m:
+                    schedule = m.group(1).strip()
+            key = (name, schedule, dept)
+            if key not in grouped:
+                grouped[key] = {
+                    'name': name,
+                    'schedule': schedule,
+                    'dept': dept,
+                    'serials': [],
+                    'teachers': set(),
+                    'required': required,
+                    'grade': grade,
+                    'documents': []
+                }
+            if serial:
+                grouped[key]['serials'].append(serial)
+            if teacher:
+                grouped[key]['teachers'].add(teacher)
+            grouped[key]['documents'].append(document)
+            # 保留必選修與年級
+            if required and not grouped[key]['required']:
+                grouped[key]['required'] = required
+            if grade and not grouped[key]['grade']:
+                grouped[key]['grade'] = grade
+        
+        context_parts = []
+        for i, (key, info) in enumerate(grouped.items(), 1):
+            name = info['name']
+            schedule = info['schedule']
+            dept = info['dept']
+            serials = info['serials']
+            teachers = info['teachers']
+            required = info['required']
+            grade = info['grade']
+            
+            context_parts.append(f"\n【課程 {i}】")
             title_suffix = ""
             if schedule:
                 title_suffix += f"（{schedule}）"
@@ -636,104 +719,44 @@ class CourseQuerySystem:
                 title_suffix += f"［{dept}］"
             if name:
                 context_parts.append(f"課程名稱：{name}{title_suffix}")
-            
-            # 從 document 文字中提取必選修資訊
-            document = course.get('document', '')
-            required = metadata.get('required', '')
-            
-            # 如果 metadata 中沒有 required，從 document 中提取
-            if not required and '必選修：' in document:
-                import re
-                match = re.search(r'必選修：([^\n]+)', document)
-                if match:
-                    required = match.group(1).strip()
-            
-            # 在課程資料前加上清晰的標記
+            if serials:
+                context_parts.append(f"課程代碼：{', '.join(serials)}")
+            if teachers:
+                context_parts.append(f"授課教師：{' & '.join(sorted(teachers))}")
             if dept:
                 context_parts.append(f"系所：{dept}")
+            if required:
+                context_parts.append(f"必選修：{required}")
+            if schedule:
+                context_parts.append(f"上課時間：{schedule}")
+            if grade:
+                context_parts.append(f"年級：{grade}")
             
-            # 明確標示是否為必修（從 document 或 metadata 中判斷）
-            # 如果有 target_grade，顯示該 grade 的必選修狀態
-            if target_grade:
-                # 優先使用 grade_required_mapping JSON 欄位
-                mapping_json = metadata.get('grade_required_mapping', '')
-                
-                if mapping_json:
-                    try:
-                        from utils import check_grades_required_from_json
-                        course_dict = {'grade_required_mapping': mapping_json}
-                        # 使用 check_grades_required_from_json 來獲取所有匹配的年級
-                        all_matches = check_grades_required_from_json(course_dict, target_grade)
-                        
-                        if all_matches:
-                            # 過濾符合必選修要求的匹配
-                            if target_required:
-                                filtered_matches = [(g, r) for g, r in all_matches if r == target_required]
-                            else:
-                                filtered_matches = all_matches
-                            
-                            if filtered_matches:
-                                matched_grades = [g for g, r in filtered_matches]
-                                status_text = '必修' if target_required == '必' else '選修' if target_required == '選' else '必修/選修'
-                                
-                                if len(matched_grades) == 1:
-                                    context_parts.append(f"✅ 對於 {matched_grades[0]}，這是{status_text}課程")
-                                else:
-                                    # 顯示所有匹配的年級
-                                    grades_str = '、'.join(matched_grades)
-                                    context_parts.append(f"✅ 對於 {grades_str}，這是{status_text}課程")
-                    except:
-                        # 如果出錯，使用舊的方式
-                        course_dict = {'grade_required_mapping': mapping_json}
-                        grade_required = check_grade_required_from_json(course_dict, target_grade)
-                        if grade_required == '必':
-                            context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
-                        elif grade_required == '選':
-                            context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
-                else:
-                    # 傳統方式：從 metadata 或 document 中提取
-                    grade = metadata.get('grade', '')
-                    required = metadata.get('required', '')
-                    
-                    if not grade or not required:
-                        grade_match = re.search(r'年級：([^\n]+)', document)
-                        required_match = re.search(r'必選修：([^\n]+)', document)
-                        if grade_match:
-                            grade = grade_match.group(1).strip()
-                        if required_match:
-                            required = required_match.group(1).strip()
-                    
-                    if grade and required:
-                        course_dict = {'grade': grade, 'required': required}
-                        grade_required = check_grade_required(course_dict, target_grade)
-                        
-                        if grade_required == '必':
-                            context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
-                        elif grade_required == '選':
-                            context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
-                    else:
-                        # 無法確定該 grade 的狀態，顯示整體狀態
-                        if '必' in required:
-                            context_parts.append(f"⚠️ 此課程對某些組別是必修，但對 {target_grade} 的狀態無法確定")
+            # 必選修標示（沿用原邏輯）
+            document_combined = "\n".join(info['documents'])
+            show_required = required
+            if not show_required and '必選修：' in document_combined:
+                import re
+                match = re.search(r'必選修：([^\n]+)', document_combined)
+                if match:
+                    show_required = match.group(1).strip()
+            if not target_grade:
+                if show_required:
+                    if '必' in show_required:
+                        context_parts.append(f"✅ 這是必修課程（必選修：{show_required}）")
+                    elif '選' in show_required and '必' not in show_required:
+                        context_parts.append(f"📝 這是選修課程（必選修：{show_required}）")
             else:
-                # 沒有 target_grade，使用傳統方式判斷
-                if required:
-                    if '必' in required:
-                        context_parts.append(f"✅ 這是必修課程（必選修：{required}）")
-                    elif '選' in required and '必' not in required:
-                        context_parts.append(f"📝 這是選修課程（必選修：{required}）")
-                elif '必選修：' in document:
-                    # 從 document 中直接判斷
-                    if '必' in document and '必選修：' in document:
-                        context_parts.append(f"✅ 這是必修課程")
-                    elif '選' in document and '必選修：選' in document:
-                        context_parts.append(f"📝 這是選修課程")
+                mapping_json = (courses[0].get('metadata', {}) or {}).get('grade_required_mapping', '')
+                # 簡化：若有 target_grade，仍盡量標示必/選
+                if show_required:
+                    if '必' in show_required:
+                        context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
+                    elif '選' in show_required and '必' not in show_required:
+                        context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
             
-            context_parts.append(course['document'])
-            
-            if course.get('distance'):
-                similarity = 1 - course['distance']
-                context_parts.append(f"（相關度：{similarity:.2%}）")
+            # 附上原文件片段以供 LLM 參考
+            context_parts.append(document_combined)
         
         return "\n".join(context_parts)
 
