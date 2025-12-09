@@ -53,6 +53,30 @@ class CourseQuerySystem:
         # 優化搜尋策略：使用更精確的關鍵詞組合
         import re
         
+        # 基本問候/常見問題快速回應，避免進入重運算
+        def basic_chat_response(q: str) -> Optional[str]:
+            text = q.strip()
+            low = text.lower()
+            # 問候
+            greet_kw = ['嗨', 'hi', 'hello', '哈囉', '你好', '您好', '早安', '午安', '晚安']
+            if any(k in text for k in greet_kw):
+                return "嗨！想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」。"
+            # 課程資訊/選課
+            course_kw = ['課程資訊', '選課', '加退選', '加選', '退選', '選修', '必修']
+            if any(k in text for k in course_kw):
+                return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
+            # 教室地點
+            if '教室' in text:
+                return "教室會寫在課程的上課時間旁，如「每週三2~4 電4F08」。你可以提供課程名稱或時間，我幫你查到對應教室。"
+            # 校園基本對話
+            if '課程代碼' in text or '課號' in text:
+                return "你可以輸入課程名稱，我會列出課程代碼；也能直接輸入課程代碼來查時段與教師。"
+            return None
+        
+        chat_reply = basic_chat_response(user_question)
+        if chat_reply:
+            return chat_reply
+        
         # 提取系所和年級資訊
         # 先提取年級（可能會包含系所資訊）
         target_grade = extract_grade_from_query(user_question)
@@ -86,6 +110,23 @@ class CourseQuerySystem:
                     target_dept = dept_pattern_match.group(1)
                 else:
                     target_dept = None
+        
+        # 如果仍未取得系所，嘗試使用常見系所關鍵詞（省略「系」的口語）
+        if not target_dept:
+            dept_keywords = {
+                '通訊': '通訊系',
+                '資工': '資工系',
+                '電機': '電機系',
+                '統計': '統計系',
+                '經濟': '經濟系',
+                '法': '法律系',
+                '財法': '財法系',
+                '企管': '企管系',
+            }
+            for kw, dept_name in dept_keywords.items():
+                if kw in user_question:
+                    target_dept = dept_name
+                    break
         
         # 構建搜尋查詢（使用多個關鍵詞組合提高召回率）
         search_queries = []
