@@ -3,6 +3,7 @@ LLM 查詢系統：整合 RAG 與 LLM，實現自然語言查詢課程
 """
 import os
 import re
+import json
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
 
@@ -251,6 +252,23 @@ class CourseQuerySystem:
             else:
                 relevant_courses = self.rag_system.search_courses(primary_search_query, n_results=search_n_results)
         
+        # helper: 判斷 grade 欄位中是否包含目標系所（須為獨立年級/組別，而非學程名稱）
+        def grade_has_target_dept(grade_text: str, target_dept: str) -> bool:
+            if not grade_text or not target_dept:
+                return False
+            tokens = re.split(r'[\\|,，/\\s]+', grade_text)
+            for tk in tokens:
+                if not tk:
+                    continue
+                if tk.startswith(target_dept):
+                    # 下一字元必須是年級/碩別/組別，而非其他系名的延伸（如「通訊系統…」）
+                    if len(tk) == len(target_dept):
+                        return True
+                    next_ch = tk[len(target_dept):len(target_dept)+1]
+                    if next_ch and next_ch in '123456789碩一二三四ABCDEFX':
+                        return True
+            return False
+
         filtered_courses = []  # 初始化 filtered_courses
         
         if need_required_filter or target_dept or target_grade:
@@ -275,6 +293,13 @@ class CourseQuerySystem:
                         dept_matches = target_dept_clean in dept_clean or dept_clean in target_dept_clean
                     else:
                         dept_matches = False
+                    
+                    # 如果系所不匹配，但年級/年級列表中有包含該系所，也允許通過（處理跨系開課）
+                    # 例如課程屬於統計系，但 grade 欄位含「通訊系2」，仍應回傳
+                    if not dept_matches:
+                        grade_text = metadata.get('grade', '')
+                        if grade_has_target_dept(grade_text, target_dept):
+                            dept_matches = True
                     
                     # 特殊情況：如果系所不匹配，但年級匹配且是必修，也應該包含
                     # 例如：「專題研討」的系所是「電機碩」，但年級中包含「資工碩1」且是必修
@@ -447,7 +472,10 @@ class CourseQuerySystem:
                                 continue
                             # 系所匹配（若有）
                             if target_dept:
-                                if target_dept not in md.get('dept', ''):
+                                dept_text = md.get('dept', '')
+                                grade_text = md.get('grade', '')
+                                # 系所直接匹配或 grade 欄位包含該系所（跨系共同必選修）
+                                if not (target_dept in dept_text or grade_has_target_dept(grade_text, target_dept)):
                                     continue
                             # 必修匹配（若有）
                             if need_required_filter and target_required:
@@ -497,8 +525,11 @@ class CourseQuerySystem:
             if target_dept:
                 filtered = []
                 for c in relevant_courses:
-                    dept = (c.get('metadata', {}) or {}).get('dept', '')
-                    if target_dept in dept:
+                    md = (c.get('metadata', {}) or {})
+                    dept = md.get('dept', '')
+                    grade_text = md.get('grade', '')
+                    # 允許系所直接匹配，或年級欄位包含該系所（跨系共同開課）
+                    if target_dept in dept or grade_has_target_dept(grade_text, target_dept):
                         filtered.append(c)
                 if filtered:
                     relevant_courses = filtered
