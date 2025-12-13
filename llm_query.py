@@ -629,13 +629,22 @@ class CourseQuerySystem:
                     pass
 
         # 3. 建立 context（相關課程資訊）
+        # 記錄總課程數量
+        total_courses_count = len(relevant_courses)
+        
+        # 限制傳給 LLM 的課程數量為 5 筆（但保留總數資訊）
+        display_limit = 5
+        courses_for_display = relevant_courses[:display_limit]
+        
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
-        context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
+        context = self._build_context(courses_for_display, target_grade=target_grade, target_required=target_required)
         
         # #region agent log
         _log_debug("llm_query.py:query", "Context built", {
             "context_length": len(context),
-            "courses_in_context": len(relevant_courses),
+            "total_courses_count": total_courses_count,
+            "courses_in_context": len(courses_for_display),
+            "display_limit": display_limit,
             "context_preview": context[:500] if context else ""
         }, "D")
         # #endregion
@@ -764,8 +773,10 @@ class CourseQuerySystem:
 9. 可以根據課程限制、選課人數等資訊提供建議
 10. **重要**：計算和顯示課程數量時：
    - 請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
-   - 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共找到 2 個符合條件的課程」或「共 2 門不同的課程」
-   - 不要顯示「前 N 個」，而是顯示實際合併後的課程數量
+   - 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程，以下列出前 5 筆」，表示總共有 X 筆課程，但你只看到前 5 筆
+   - 在這種情況下，回答最後必須顯示：「共找到 X 筆符合條件的課程，以下列出部分 5 筆：」
+   - 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程：」（沒有「前 5 筆」），表示所有課程都已列出，回答最後顯示：「共找到 X 筆符合條件的課程。」
+   - 例如：如果資料中說「共找到 10 筆符合條件的課程，以下列出前 5 筆」，你應該在回答最後顯示「共找到 10 筆符合條件的課程，以下列出部分 5 筆：」
 
 重要提醒：
 - 當你看到「相關課程資料」中有多筆標記為「✅ 這是必修課程」且系所為「資工系」的課程時，你必須全部列出，不要忽略任何一筆！
@@ -783,9 +794,15 @@ class CourseQuerySystem:
 - 如果發現你準備編造資訊，立即停止，只使用「相關課程資料」中的資訊
 - 如果「相關課程資料」中沒有符合條件的課程，明確告訴使用者「沒有找到符合條件的課程」"""
         
+        # 構建課程數量說明
+        if total_courses_count > display_limit:
+            courses_count_note = f"共找到 {total_courses_count} 筆符合條件的課程，以下列出前 {display_limit} 筆："
+        else:
+            courses_count_note = f"共找到 {total_courses_count} 筆符合條件的課程："
+        
         user_prompt = f"""使用者問題：{user_question}
 
-以下是相關課程資料（已過濾出符合條件的課程，共 {len(relevant_courses)} 筆）：
+以下是相關課程資料（{courses_count_note}）：
 {context}
 
 請仔細閱讀以上課程資料，並根據實際資料回答使用者的問題。
@@ -844,9 +861,12 @@ class CourseQuerySystem:
 - 如果資料中有課程，請**嚴格按照上述規則**組織和顯示課程資訊
 - 如果資料中沒有課程，請告訴使用者沒有找到
 - 絕對不要編造任何課程資訊
-- **課程數量計算**：計算課程數量時，請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
-  * 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共 2 個課程」或「共找到 2 門不同的課程」
-  * 不要顯示「前 5 個」，而是顯示實際合併後的課程數量，例如「共找到 2 個符合條件的課程」
+- **課程數量計算與顯示**：
+  * 計算課程數量時，請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
+  * 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程，以下列出前 5 筆」，表示總共有 X 筆課程，但你只看到前 5 筆
+  * 在這種情況下，回答最後必須顯示：「共找到 X 筆符合條件的課程，以下列出部分 5 筆：」
+  * 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程：」（沒有「前 5 筆」），表示所有課程都已列出，回答最後顯示：「共找到 X 筆符合條件的課程。」
+  * 例如：如果資料中說「共找到 10 筆符合條件的課程，以下列出前 5 筆」，你應該在回答最後顯示「共找到 10 筆符合條件的課程，以下列出部分 5 筆：」
   
 補充:
 若提問者講了跟課程無關的內容，會禮貌回應並導引至「想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」」這方向。
