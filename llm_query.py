@@ -86,14 +86,49 @@ class CourseQuerySystem:
         def basic_chat_response(q: str) -> Optional[str]:
             text = q.strip()
             low = text.lower()
+            
+            # #region agent log
+            _log_debug("llm_query.py:basic_chat_response", "Checking if query is basic chat", {
+                "query": q,
+                "text": text
+            }, "A1")
+            # #endregion
+            
+            # 先檢查是否包含系所和年級資訊（如果包含，即使有「必修」或「選修」也應該進行實際查詢）
+            has_dept = bool(re.search(r'(\S+系)', text) or re.search(r'(\S+碩)', text))
+            has_grade = bool(re.search(r'[大一三四]|碩[一二三]|[1234]年級', text) or extract_grade_from_query(text))
+            
+            # #region agent log
+            _log_debug("llm_query.py:basic_chat_response", "Detected query structure", {
+                "has_dept": has_dept,
+                "has_grade": has_grade,
+                "query": q
+            }, "A2")
+            # #endregion
+            
+            # 如果包含系所和年級資訊，這是一個具體查詢，不應該返回說明
+            if has_dept or has_grade:
+                # #region agent log
+                _log_debug("llm_query.py:basic_chat_response", "Query contains dept/grade, skipping basic response", {
+                    "query": q
+                }, "A3")
+                # #endregion
+                return None
+            
             # 問候
             greet_kw = ['嗨', 'hi', 'hello', '哈囉', '你好', '您好', '早安', '午安', '晚安']
             if any(k in text for k in greet_kw):
                 return "嗨！想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」。"
-            # 課程資訊/選課
-            course_kw = ['課程資訊', '選課', '加退選', '加選', '退選', '選修', '必修']
+            
+            # 課程資訊/選課（只有在沒有系所和年級資訊時才返回說明）
+            course_kw = ['課程資訊', '選課', '加退選', '加選', '退選']
             if any(k in text for k in course_kw):
                 return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
+            
+            # 如果只有「選修」或「必修」但沒有系所和年級，返回說明
+            if ('選修' in text or '必修' in text) and not (has_dept or has_grade):
+                return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
+            
             # 教室地點
             if '教室' in text:
                 return "教室會寫在課程的上課時間旁，如「每週三2~4 電4F08」。你可以提供課程名稱或時間，我幫你查到對應教室。"
@@ -104,6 +139,12 @@ class CourseQuerySystem:
         
         chat_reply = basic_chat_response(user_question)
         if chat_reply:
+            # #region agent log
+            _log_debug("llm_query.py:query", "Returning basic chat response", {
+                "query": user_question,
+                "response": chat_reply
+            }, "A4")
+            # #endregion
             return chat_reply
         
         # 提取系所和年級資訊
