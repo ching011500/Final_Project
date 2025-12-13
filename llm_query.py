@@ -6,6 +6,7 @@ import re
 import json
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
+import time
 
 # 載入環境變數
 load_dotenv()
@@ -21,6 +22,27 @@ from utils import (
     extract_time_from_query,
     check_time_match
 )
+
+# #region agent log
+# Debug logging helper
+def _log_debug(location: str, message: str, data: dict = None, hypothesis_id: str = None):
+    """Write debug log to NDJSON file"""
+    log_path = "/Users/yuching/Documents/大四/人工智慧導論/final_project/.cursor/debug.log"
+    try:
+        log_entry = {
+            "timestamp": int(time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "sessionId": "accuracy-improvement",
+            "runId": "run1",
+            "hypothesisId": hypothesis_id or "A"
+        }
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # Silently fail if logging fails
+# #endregion
 
 class CourseQuerySystem:
     def __init__(self, rag_system: CourseRAGSystem):
@@ -49,6 +71,13 @@ class CourseQuerySystem:
         Returns:
             LLM 生成的回答
         """
+        # #region agent log
+        _log_debug("llm_query.py:query", "Query started", {
+            "user_question": user_question,
+            "n_results": n_results
+        }, "A")
+        # #endregion
+        
         # 1. 使用 RAG 檢索相關課程
         # 優化搜尋策略：使用更精確的關鍵詞組合
         import re
@@ -57,19 +86,49 @@ class CourseQuerySystem:
         def basic_chat_response(q: str) -> Optional[str]:
             text = q.strip()
             low = text.lower()
+            
+            # #region agent log
+            _log_debug("llm_query.py:basic_chat_response", "Checking if query is basic chat", {
+                "query": q,
+                "text": text
+            }, "A1")
+            # #endregion
+            
+            # 先檢查是否包含系所和年級資訊（如果包含，即使有「必修」或「選修」也應該進行實際查詢）
+            has_dept = bool(re.search(r'(\S+系)', text) or re.search(r'(\S+碩)', text))
+            has_grade = bool(re.search(r'[大一三四]|碩[一二三]|[1234]年級', text) or extract_grade_from_query(text))
+            
+            # #region agent log
+            _log_debug("llm_query.py:basic_chat_response", "Detected query structure", {
+                "has_dept": has_dept,
+                "has_grade": has_grade,
+                "query": q
+            }, "A2")
+            # #endregion
+            
+            # 如果包含系所和年級資訊，這是一個具體查詢，不應該返回說明
+            if has_dept or has_grade:
+                # #region agent log
+                _log_debug("llm_query.py:basic_chat_response", "Query contains dept/grade, skipping basic response", {
+                    "query": q
+                }, "A3")
+                # #endregion
+                return None
+            
             # 問候
             greet_kw = ['嗨', 'hi', 'hello', '哈囉', '你好', '您好', '早安', '午安', '晚安']
             if any(k in text for k in greet_kw):
                 return "嗨！想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」。"
-            # 課程資訊/選課
-            # 移除 '選修', '必修' 以免擋住正常查詢（如「通訊系必修」）
+            
+            # 課程資訊/選課（只有在沒有系所和年級資訊時才返回說明）
             course_kw = ['課程資訊', '選課', '加退選', '加選', '退選']
             if any(k in text for k in course_kw):
                 return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
             
-            # 針對單獨輸入「必修」或「選修」的情況提供引導
-            if text in ['必修', '選修', '必修課', '選修課']:
+            # 如果只有「選修」或「必修」但沒有系所和年級，返回說明
+            if ('選修' in text or '必修' in text) and not (has_dept or has_grade):
                 return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
+            
             # 教室地點
             if '教室' in text:
                 return "教室會寫在課程的上課時間旁，如「每週三2~4 電4F08」。你可以提供課程名稱或時間，我幫你查到對應教室。"
@@ -80,11 +139,24 @@ class CourseQuerySystem:
         
         chat_reply = basic_chat_response(user_question)
         if chat_reply:
+            # #region agent log
+            _log_debug("llm_query.py:query", "Returning basic chat response", {
+                "query": user_question,
+                "response": chat_reply
+            }, "A4")
+            # #endregion
             return chat_reply
         
         # 提取系所和年級資訊
         # 先提取年級（可能會包含系所資訊）
         target_grade = extract_grade_from_query(user_question)
+        
+        # #region agent log
+        _log_debug("llm_query.py:query", "Extracted query parameters", {
+            "target_grade": target_grade,
+            "user_question": user_question
+        }, "A")
+        # #endregion
         
         # 從年級中提取系所（如果有的話）
         if target_grade:
@@ -224,26 +296,6 @@ class CourseQuerySystem:
         # 提取時間條件
         time_condition = extract_time_from_query(user_question)
         
-        # 處理週末邏輯
-        if '週末' in user_question or '周末' in user_question or '假日' in user_question:
-            time_condition['is_weekend'] = True
-
-        # 定義本地時間檢查函數，支援週末
-        def local_check_time_match(schedule: str, condition: Dict) -> bool:
-            if condition.get('is_weekend'):
-                # 必須包含六或日
-                if '六' not in schedule and '日' not in schedule:
-                    return False
-                # 如果有節次條件，分別檢查週六或週日
-                if condition.get('period'):
-                    c_sat = condition.copy()
-                    c_sat['day'] = '六'
-                    c_sun = condition.copy()
-                    c_sun['day'] = '日'
-                    return check_time_match(schedule, c_sat) or check_time_match(schedule, c_sun)
-                return True
-            return check_time_match(schedule, condition)
-        
         # 擴大搜尋範圍，取得更多候選課程
         # 時間條件與年級/必修/系所都會適度放大，避免漏掉跨時段課
         if target_grade:
@@ -256,7 +308,7 @@ class CourseQuerySystem:
         else:
             search_n_results = n_results * 5
         # 如果有時間條件，進一步放大
-        if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+        if time_condition.get('day') or time_condition.get('period'):
             search_n_results = max(search_n_results, n_results * 10)
         
         # 對於碩士班必修查詢，也使用「專題研討」或「Seminar」作為搜尋關鍵詞
@@ -282,7 +334,7 @@ class CourseQuerySystem:
             relevant_courses = combined_results
         else:
             # 如果有明確的時間條件，直接全庫掃描以免漏抓不同時段
-            if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+            if time_condition.get('day') or time_condition.get('period'):
                 relevant_courses = []
                 try:
                     total = self.rag_system.collection.count()
@@ -299,7 +351,7 @@ class CourseQuerySystem:
                             schedule = md.get('schedule', '')
                             if not schedule:
                                 continue
-                            if not local_check_time_match(schedule, time_condition):
+                            if not check_time_match(schedule, time_condition):
                                 continue
                             relevant_courses.append({
                                 'document': doc,
@@ -318,41 +370,30 @@ class CourseQuerySystem:
             else:
                 relevant_courses = self.rag_system.search_courses(primary_search_query, n_results=search_n_results)
         
+        # #region agent log
+        _log_debug("llm_query.py:query", "RAG search completed", {
+            "primary_search_query": primary_search_query,
+            "search_n_results": search_n_results,
+            "retrieved_count": len(relevant_courses),
+            "top_3_similarities": [c.get('similarity', 0) for c in relevant_courses[:3]] if relevant_courses else []
+        }, "B")
+        # #endregion
+        
         # helper: 判斷 grade 欄位中是否包含目標系所（須為獨立年級/組別，而非學程名稱）
         def grade_has_target_dept(grade_text: str, target_dept: str) -> bool:
             if not grade_text or not target_dept:
                 return False
-            
-            # 擴充目標系所名稱，處理別名與全稱
-            targets = {target_dept}
-            if target_dept.endswith('系'):
-                short = target_dept[:-1]
-                targets.add(short)
-                # 常見縮寫對應全稱
-                aliases = {
-                    '資工': '資訊工程', '通訊': '通訊工程', '電機': '電機工程',
-                    '企管': '企業管理', '資管': '資訊管理', '公行': '公共行政',
-                    '不動': '不動產', '休運': '休閒運動', '社工': '社會工作',
-                    '財法': '財經法律', '運管': '運動管理'
-                }
-                if short in aliases:
-                    targets.add(aliases[short])
-                    targets.add(aliases[short] + '系')
-
             tokens = re.split(r'[\\|,，/\\s]+', grade_text)
             for tk in tokens:
                 if not tk:
                     continue
-                for t in targets:
-                    if tk.startswith(t):
-                        if len(tk) == len(t):
-                            return True
-                        # 檢查後續字元：允許接系、所、碩、博、數字、英文、班、組
-                        if tk[len(t)] in '系所碩博班組1234567890ABCDEF一二三四五六七八九必選':
-                            return True
-                        # 特殊：若 t 為簡稱（如通訊），允許接工程
-                        if t in ['通訊', '資訊', '電機'] and tk[len(t):].startswith('工程'):
-                            return True
+                if tk.startswith(target_dept):
+                    # 下一字元必須是年級/碩別/組別，而非其他系名的延伸（如「通訊系統…」）
+                    if len(tk) == len(target_dept):
+                        return True
+                    next_ch = tk[len(target_dept):len(target_dept)+1]
+                    if next_ch and next_ch in '123456789碩一二三四ABCDEFX':
+                        return True
             return False
 
         filtered_courses = []  # 初始化 filtered_courses
@@ -374,9 +415,11 @@ class CourseQuerySystem:
                         dept_matches = False
                 
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
+                # 如果沒有指定「必修」或「選修」，不過濾必選修，讓所有課程都通過
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
                 
-                if need_required_filter or target_grade:
+                # 只有在明確指定「必修」或「選修」時才進行必選修過濾
+                if need_required_filter:
                     # 需要進行過濾
                     is_required = False  # 預設為 False，需要明確匹配才通過
                     
@@ -389,10 +432,6 @@ class CourseQuerySystem:
                         course_dict = {'grade_required_mapping': mapping_json}
                         # 檢查是否匹配（例如「經濟系1」會匹配「經濟系1A」、「經濟系1B」等）
                         grade_required = check_grade_required_from_json(course_dict, target_grade)
-                        # 嘗試放寬匹配：移除「系」字（處理「通訊系1」vs「通訊1」的情況）
-                        if grade_required is None and '系' in target_grade:
-                            relaxed_grade = target_grade.replace('系', '')
-                            grade_required = check_grade_required_from_json(course_dict, relaxed_grade)
                     elif target_grade:
                         # 傳統方式：從 metadata 或 document 中取得 grade 和 required
                         grade = metadata.get('grade', '')
@@ -412,10 +451,6 @@ class CourseQuerySystem:
                         if grade and required:
                             course_dict = {'grade': grade, 'required': required}
                             grade_required = check_grade_required(course_dict, target_grade)
-                            # 嘗試放寬匹配：移除「系」字
-                            if grade_required is None and '系' in target_grade:
-                                relaxed_grade = target_grade.replace('系', '')
-                                grade_required = check_grade_required(course_dict, relaxed_grade)
                         # 如果還是沒有 grade 和 required，嘗試從 document 中解析 JSON
                         elif mapping_json:
                             # 如果 metadata 中沒有但 document 中有，嘗試解析
@@ -431,9 +466,6 @@ class CourseQuerySystem:
                     if target_required and grade_required is not None:
                         # 有明確的必選修要求，檢查是否符合
                         is_required = (grade_required == target_required)
-                    elif target_grade and grade_required is not None:
-                        # 有 grade 要求但沒有必選修要求，只要有對應的 grade 就通過
-                        is_required = True
                     elif target_grade and target_required and mapping_json and grade_required is None:
                         # 特殊情況：當 target_grade 是「經濟系1」時，grade_required 可能是 None
                         # 需要檢查所有匹配（1A、1B等）
@@ -446,12 +478,12 @@ class CourseQuerySystem:
                                 is_required = True
                                 grade_required = target_required  # 設置 grade_required 以便後續使用
                                 break
-                    elif need_required_filter and not target_grade:
+                    elif not target_grade:
                         # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
                         meta_required = metadata.get('required', '')
                         if target_required == '必' and meta_required and '必' in meta_required:
                             is_required = True
-                        elif target_required == '選' and meta_required and '選' in meta_required:
+                        elif target_required == '選' and meta_required and ('選' in meta_required and '必' not in meta_required):
                             is_required = True
                         elif '必選修：' in document:
                             required_match = re.search(r'必選修：([^\n]+)', document)
@@ -460,32 +492,18 @@ class CourseQuerySystem:
                                 if target_required == '必':
                                     is_required = '必' in required_text
                                 elif target_required == '選':
-                                    is_required = '選' in required_text
-                        
-                        # 如果上述檢查仍未通過，但有 mapping_json，嘗試從中檢查是否有任何組別符合
-                        if not is_required and mapping_json:
-                            try:
-                                mapping_data = json.loads(mapping_json)
-                                mapping = mapping_data.get('mapping', [])
-                                for _, req in mapping:
-                                    if target_required == '必' and '必' in req:
-                                        is_required = True
-                                        break
-                                    elif target_required == '選' and '選' in req:
-                                        is_required = True
-                                        break
-                            except:
-                                pass
+                                    is_required = '選' in required_text and '必' not in required_text
                         # 注意：如果已經有 target_grade，不應該使用這個傳統方式檢查
                         # 因為這個方式無法檢查特定年級的必選修狀態
                         # 只有在沒有 target_grade 的情況下才使用
+                # 如果沒有指定必選修過濾（need_required_filter = False），is_required 保持為 True，所有課程都通過
                 
                 # 檢查時間條件
                 time_matches = True
-                if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+                if time_condition.get('day') or time_condition.get('period'):
                     schedule = metadata.get('schedule', '')
                     if schedule:
-                        time_matches = local_check_time_match(schedule, time_condition)
+                        time_matches = check_time_match(schedule, time_condition)
                     else:
                         # 如果沒有 schedule 資訊，但查詢中有時間條件，則不符合
                         time_matches = False
@@ -493,6 +511,17 @@ class CourseQuerySystem:
                 # 同時滿足所有條件
                 if dept_matches and is_required and time_matches:
                     filtered_courses.append(course)
+            
+            # #region agent log
+            _log_debug("llm_query.py:query", "Filtering completed", {
+                "original_count": len(relevant_courses),
+                "filtered_count": len(filtered_courses),
+                "target_dept": target_dept,
+                "target_grade": target_grade,
+                "target_required": target_required,
+                "time_condition": time_condition
+            }, "C")
+            # #endregion
             
             # 如果過濾後有結果，優先使用過濾後的結果（取多一點以便合併）
             if filtered_courses:
@@ -511,8 +540,8 @@ class CourseQuerySystem:
                         # 只檢查年級欄位
                         dept_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
                     time_ok = True
-                    if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
-                        time_ok = local_check_time_match(schedule, time_condition) if schedule else False
+                    if time_condition.get('day') or time_condition.get('period'):
+                        time_ok = check_time_match(schedule, time_condition) if schedule else False
                     
                     if dept_ok and time_ok:
                         relaxed.append(course)
@@ -523,12 +552,12 @@ class CourseQuerySystem:
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         else:
             # 沒有系所/年級/必修條件，但有時間條件時也要過濾時間
-            if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+            if time_condition.get('day') or time_condition.get('period'):
                 time_filtered = []
                 for course in relevant_courses:
                     metadata = course.get('metadata', {})
                     schedule = metadata.get('schedule', '')
-                    if schedule and local_check_time_match(schedule, time_condition):
+                    if schedule and check_time_match(schedule, time_condition):
                         time_filtered.append(course)
                 if time_filtered:
                     relevant_courses = time_filtered[:n_results * 2]
@@ -536,7 +565,7 @@ class CourseQuerySystem:
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         
         # 時間條件補強：若結果太少，再全量掃描一次 collection 依時間/系所（與必修需求）補充
-        if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+        if time_condition.get('day') or time_condition.get('period'):
             if len(relevant_courses) < n_results:
                 try:
                     total = self.rag_system.collection.count()
@@ -553,7 +582,7 @@ class CourseQuerySystem:
                             if not schedule:
                                 continue
                             # 時間匹配
-                            if not local_check_time_match(schedule, time_condition):
+                            if not check_time_match(schedule, time_condition):
                                 continue
                             # 系所匹配（若有）：只依賴年級欄位
                             if target_dept:
@@ -600,11 +629,28 @@ class CourseQuerySystem:
                     pass
 
         # 3. 建立 context（相關課程資訊）
+        # 記錄總課程數量
+        total_courses_count = len(relevant_courses)
+        
+        # 限制傳給 LLM 的課程數量為 5 筆（但保留總數資訊）
+        display_limit = 5
+        courses_for_display = relevant_courses[:display_limit]
+        
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
-        context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
+        context = self._build_context(courses_for_display, target_grade=target_grade, target_required=target_required)
+        
+        # #region agent log
+        _log_debug("llm_query.py:query", "Context built", {
+            "context_length": len(context),
+            "total_courses_count": total_courses_count,
+            "courses_in_context": len(courses_for_display),
+            "display_limit": display_limit,
+            "context_preview": context[:500] if context else ""
+        }, "D")
+        # #endregion
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
-        if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+        if time_condition.get('day') or time_condition.get('period'):
             # 進一步依系所過濾：只依賴年級欄位
             if target_dept:
                 filtered = []
@@ -650,13 +696,25 @@ class CourseQuerySystem:
             lines.append(f"共找到 {len(groups)} 門課程。")
             return "\n".join(lines)
         
-        # 4. 建立 prompt
+        # 4. 重新排序檢索結果（提升相關性）
+        relevant_courses = self._rerank_courses(relevant_courses, user_question, target_grade, target_required)
+        
+        # #region agent log
+        _log_debug("llm_query.py:query", "Reranking completed", {
+            "courses_count": len(relevant_courses),
+            "top_3_scores": [c.get('rerank_score', 0) for c in relevant_courses[:3]] if relevant_courses else []
+        }, "H")
+        # #endregion
+        
+        # 5. 建立 prompt
         system_prompt = """你是一個友善的課程查詢助手，專門協助學生查詢國立臺北大學的課程資訊。
 
-⚠️ 重要規則：
+⚠️ 重要規則（嚴格遵守）：
 1. 你必須完全根據提供的「相關課程資料」來回答，絕對不能編造、發明或猜測任何課程資訊
 2. 如果提供的資料中沒有某個資訊，就說「資料中未提供」，不要編造
 3. 只能使用「相關課程資料」中實際存在的課程，不能自己創造課程
+4. 在回答前，請先檢查你提到的每個課程名稱、課程代碼、教師姓名是否都在「相關課程資料」中
+5. 如果「相關課程資料」中沒有符合條件的課程，明確告訴使用者「沒有找到符合條件的課程」
 
 回答時的指導原則：
 1. 使用繁體中文回答，語氣自然、像跟同學聊天，簡短問候開頭也可以（但不要太長）
@@ -715,16 +773,36 @@ class CourseQuerySystem:
 9. 可以根據課程限制、選課人數等資訊提供建議
 10. **重要**：計算和顯示課程數量時：
    - 請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
-   - 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共找到 2 個符合條件的課程」或「共 2 門不同的課程」
-   - 不要顯示「前 N 個」，而是顯示實際合併後的課程數量
+   - 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程，以下列出前 5 筆」，表示總共有 X 筆課程，但你只看到前 5 筆
+   - 在這種情況下，回答最後必須顯示：「共找到 X 筆符合條件的課程，以下列出部分 5 筆：」
+   - 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程：」（沒有「前 5 筆」），表示所有課程都已列出，回答最後顯示：「共找到 X 筆符合條件的課程。」
+   - 例如：如果資料中說「共找到 10 筆符合條件的課程，以下列出前 5 筆」，你應該在回答最後顯示「共找到 10 筆符合條件的課程，以下列出部分 5 筆：」
 
 重要提醒：
 - 當你看到「相關課程資料」中有多筆標記為「✅ 這是必修課程」且系所為「資工系」的課程時，你必須全部列出，不要忽略任何一筆！
-- 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！"""
+- 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！
+
+**驗證步驟（回答前必須執行）**：
+1. 列出你將在回答中提到的所有課程名稱
+2. 逐一檢查每個課程名稱是否在「相關課程資料」中
+3. 列出你將在回答中提到的所有課程代碼
+4. 逐一檢查每個課程代碼是否在「相關課程資料」中
+5. 如果發現任何不在「相關課程資料」中的資訊，立即移除，不要使用
+6. 確認你提到的所有教師姓名、上課時間、學分數等資訊都來自「相關課程資料」
+
+**如果驗證失敗**：
+- 如果發現你準備編造資訊，立即停止，只使用「相關課程資料」中的資訊
+- 如果「相關課程資料」中沒有符合條件的課程，明確告訴使用者「沒有找到符合條件的課程」"""
+        
+        # 構建課程數量說明
+        if total_courses_count > display_limit:
+            courses_count_note = f"共找到 {total_courses_count} 筆符合條件的課程，以下列出前 {display_limit} 筆："
+        else:
+            courses_count_note = f"共找到 {total_courses_count} 筆符合條件的課程："
         
         user_prompt = f"""使用者問題：{user_question}
 
-以下是相關課程資料（已過濾出符合條件的課程，共 {len(relevant_courses)} 筆）：
+以下是相關課程資料（{courses_count_note}）：
 {context}
 
 請仔細閱讀以上課程資料，並根據實際資料回答使用者的問題。
@@ -783,9 +861,19 @@ class CourseQuerySystem:
 - 如果資料中有課程，請**嚴格按照上述規則**組織和顯示課程資訊
 - 如果資料中沒有課程，請告訴使用者沒有找到
 - 絕對不要編造任何課程資訊
-- **課程數量計算**：計算課程數量時，請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
-  * 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共 2 個課程」或「共找到 2 門不同的課程」
-  * 不要顯示「前 5 個」，而是顯示實際合併後的課程數量，例如「共找到 2 個符合條件的課程」"""
+- **課程數量計算與顯示**：
+  * 計算課程數量時，請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
+  * 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程，以下列出前 5 筆」，表示總共有 X 筆課程，但你只看到前 5 筆
+  * 在這種情況下，回答最後必須顯示：「共找到 X 筆符合條件的課程，以下列出部分 5 筆：」
+  * 如果「相關課程資料」中註明「共找到 X 筆符合條件的課程：」（沒有「前 5 筆」），表示所有課程都已列出，回答最後顯示：「共找到 X 筆符合條件的課程。」
+  * 例如：如果資料中說「共找到 10 筆符合條件的課程，以下列出前 5 筆」，你應該在回答最後顯示「共找到 10 筆符合條件的課程，以下列出部分 5 筆：」
+  
+補充:
+若提問者講了跟課程無關的內容，會禮貌回應並導引至「想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」」這方向。
+-回應「閉嘴、不要」等負面且與課程無關之用詞，可以禮貌、中性回應，比如「好，了解，若之後有需要幫忙可以再關鍵字查詢」。
+-回應「感謝、謝謝」等正面且與課程無關之用詞，可以禮貌回復比如「不客氣，若之後有需要幫忙可以再關鍵字查詢」。
+-其他回應諸如「今天天氣真好」或其他與課程無關之用詞，也一樣禮貌且精簡回應，並帶回預設之方向。
+-可以依語氣語意需求，做合理修正，讓前後語意語氣流暢通順，這很重要
         
         # 4. 呼叫 LLM 生成回答
         try:
@@ -800,9 +888,40 @@ class CourseQuerySystem:
             )
             
             answer = response.choices[0].message.content
+            
+            # #region agent log
+            _log_debug("llm_query.py:query", "LLM response generated", {
+                "answer_length": len(answer),
+                "answer_preview": answer[:300] if answer else "",
+                "model": "gpt-4o-mini",
+                "temperature": 0.1
+            }, "E")
+            # #endregion
+            
+            # 驗證回答是否與檢索資料一致
+            validation_result = self._validate_answer(answer, relevant_courses, user_question)
+            
+            # #region agent log
+            _log_debug("llm_query.py:query", "Answer validation", {
+                "is_valid": validation_result.get("is_valid", False),
+                "validation_score": validation_result.get("score", 0),
+                "warnings": validation_result.get("warnings", [])
+            }, "F")
+            # #endregion
+            
+            # 如果驗證失敗，添加警告或重新生成
+            if not validation_result.get("is_valid", True) and validation_result.get("warnings"):
+                answer = answer + "\n\n⚠️ 注意：部分資訊可能需要進一步確認。"
+            
             return answer
         
         except Exception as e:
+            # #region agent log
+            _log_debug("llm_query.py:query", "Error occurred", {
+                "error": str(e),
+                "error_type": type(e).__name__
+            }, "G")
+            # #endregion
             return f"❌ 查詢時發生錯誤：{str(e)}"
     
     def _build_context(self, courses: List[Dict], target_grade: Optional[str] = None, target_required: Optional[str] = None) -> str:
@@ -907,6 +1026,144 @@ class CourseQuerySystem:
             if grade and not grouped[key]['grade']:
                 grouped[key]['grade'] = grade
         return list(grouped.values())
+    
+    def _validate_answer(self, answer: str, courses: List[Dict], query: str) -> Dict:
+        """
+        驗證 LLM 回答是否與檢索到的課程資料一致
+        
+        Args:
+            answer: LLM 生成的回答
+            courses: 檢索到的課程列表
+            query: 原始查詢
+            
+        Returns:
+            驗證結果字典，包含 is_valid, score, warnings
+        """
+        validation_result = {
+            "is_valid": True,
+            "score": 1.0,
+            "warnings": []
+        }
+        
+        if not answer or not courses:
+            validation_result["is_valid"] = False
+            validation_result["score"] = 0.0
+            validation_result["warnings"].append("回答或課程資料為空")
+            return validation_result
+        
+        # 從檢索到的課程中提取關鍵資訊
+        course_names = set()
+        course_serials = set()
+        course_teachers = set()
+        
+        for course in courses:
+            metadata = course.get('metadata', {})
+            if metadata.get('name'):
+                course_names.add(metadata['name'])
+            if metadata.get('serial'):
+                course_serials.add(metadata['serial'])
+            if metadata.get('teacher'):
+                course_teachers.add(metadata['teacher'])
+        
+        # 檢查回答中提到的課程名稱是否在檢索結果中
+        mentioned_names = []
+        for name in course_names:
+            if name in answer:
+                mentioned_names.append(name)
+        
+        # 檢查回答中提到的課程代碼是否在檢索結果中
+        mentioned_serials = []
+        for serial in course_serials:
+            if serial in answer:
+                mentioned_serials.append(serial)
+        
+        # 計算驗證分數
+        if course_names:
+            name_coverage = len(mentioned_names) / len(course_names)
+        else:
+            name_coverage = 0.0
+        
+        if course_serials:
+            serial_coverage = len(mentioned_serials) / len(course_serials)
+        else:
+            serial_coverage = 0.0
+        
+        # 綜合分數（加權平均）
+        validation_result["score"] = (name_coverage * 0.6 + serial_coverage * 0.4)
+        
+        # 如果覆蓋率太低，標記為無效
+        if validation_result["score"] < 0.3:
+            validation_result["is_valid"] = False
+            validation_result["warnings"].append(f"回答中提到的課程與檢索結果匹配度較低（{validation_result['score']:.2%}）")
+        
+        # 檢查是否有明顯的編造資訊（例如回答中提到了檢索結果中沒有的課程）
+        # 簡單檢查：如果回答很長但提到的課程很少，可能有問題
+        if len(answer) > 500 and len(mentioned_names) < 2 and len(course_names) > 5:
+            validation_result["warnings"].append("回答可能遺漏了部分相關課程")
+        
+        return validation_result
+    
+    def _rerank_courses(self, courses: List[Dict], query: str, target_grade: Optional[str] = None, target_required: Optional[str] = None) -> List[Dict]:
+        """
+        重新排序課程，提升相關性
+        
+        Args:
+            courses: 課程列表
+            query: 使用者查詢
+            target_grade: 目標年級
+            target_required: 目標必選修
+            
+        Returns:
+            重新排序後的課程列表
+        """
+        if not courses:
+            return courses
+        
+        # 計算每個課程的重新排序分數
+        for course in courses:
+            score = course.get('similarity', 0.0) or course.get('hybrid_score', 0.0) or 0.0
+            
+            metadata = course.get('metadata', {})
+            document = course.get('document', '')
+            
+            # 1. 查詢關鍵詞匹配加分
+            query_lower = query.lower()
+            course_text = (metadata.get('name', '') + ' ' + document).lower()
+            
+            # 計算關鍵詞匹配度
+            query_words = set(query_lower.split())
+            course_words = set(course_text.split())
+            keyword_overlap = len(query_words & course_words) / max(len(query_words), 1)
+            score += keyword_overlap * 0.2
+            
+            # 2. 年級匹配加分
+            if target_grade:
+                grade_text = metadata.get('grade', '')
+                if target_grade in grade_text:
+                    score += 0.3
+                elif any(part in grade_text for part in target_grade.split() if len(part) > 1):
+                    score += 0.15
+            
+            # 3. 必選修匹配加分
+            if target_required:
+                required_text = metadata.get('required', '')
+                if target_required == '必' and '必' in required_text:
+                    score += 0.2
+                elif target_required == '選' and '選' in required_text and '必' not in required_text:
+                    score += 0.2
+            
+            # 4. 系所匹配加分（如果查詢中包含系所）
+            if '系' in query or '碩' in query:
+                dept = metadata.get('dept', '')
+                if dept and any(dept_part in query for dept_part in dept.split() if len(dept_part) > 1):
+                    score += 0.15
+            
+            course['rerank_score'] = score
+        
+        # 按重新排序分數排序
+        courses.sort(key=lambda x: x.get('rerank_score', 0), reverse=True)
+        
+        return courses
 
 
 if __name__ == "__main__":
@@ -927,3 +1184,4 @@ if __name__ == "__main__":
         answer = query_system.query(question, n_results=3)
         print(f"💬 回答：{answer}")
         print("-" * 50)
+
