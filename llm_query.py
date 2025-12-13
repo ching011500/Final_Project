@@ -415,9 +415,11 @@ class CourseQuerySystem:
                         dept_matches = False
                 
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
+                # 如果沒有指定「必修」或「選修」，不過濾必選修，讓所有課程都通過
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
                 
-                if need_required_filter or target_grade:
+                # 只有在明確指定「必修」或「選修」時才進行必選修過濾
+                if need_required_filter:
                     # 需要進行過濾
                     is_required = False  # 預設為 False，需要明確匹配才通過
                     
@@ -464,9 +466,6 @@ class CourseQuerySystem:
                     if target_required and grade_required is not None:
                         # 有明確的必選修要求，檢查是否符合
                         is_required = (grade_required == target_required)
-                    elif target_grade and grade_required is not None:
-                        # 有 grade 要求但沒有必選修要求，只要有對應的 grade 就通過
-                        is_required = True
                     elif target_grade and target_required and mapping_json and grade_required is None:
                         # 特殊情況：當 target_grade 是「經濟系1」時，grade_required 可能是 None
                         # 需要檢查所有匹配（1A、1B等）
@@ -479,7 +478,7 @@ class CourseQuerySystem:
                                 is_required = True
                                 grade_required = target_required  # 設置 grade_required 以便後續使用
                                 break
-                    elif need_required_filter and not target_grade:
+                    elif not target_grade:
                         # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
                         meta_required = metadata.get('required', '')
                         if target_required == '必' and meta_required and '必' in meta_required:
@@ -497,6 +496,7 @@ class CourseQuerySystem:
                         # 注意：如果已經有 target_grade，不應該使用這個傳統方式檢查
                         # 因為這個方式無法檢查特定年級的必選修狀態
                         # 只有在沒有 target_grade 的情況下才使用
+                # 如果沒有指定必選修過濾（need_required_filter = False），is_required 保持為 True，所有課程都通過
                 
                 # 檢查時間條件
                 time_matches = True
