@@ -37,13 +37,6 @@ class CourseQuerySystem:
         if not api_key:
             raise ValueError("請設定 OPENAI_API_KEY 環境變數")
         self.openai_client = OpenAI(api_key=api_key)
-        
-        # 分頁狀態儲存
-        self.last_grouped_results = []
-        self.shown_count = 0
-        self.last_mode = 'llm'  # 'llm' or 'deterministic'
-        self.last_target_grade = None
-        self.last_target_required = None
     
     def query(self, user_question: str, n_results: int = 10) -> str:
         """
@@ -56,20 +49,6 @@ class CourseQuerySystem:
         Returns:
             LLM 生成的回答
         """
-        # 0. 檢查是否為「繼續顯示」的請求
-        continuation_keywords = {'好', '好的', '要', '是', '繼續', '下一頁', 'next', 'yes', 'ok', '麻煩你了', '請繼續', '看更多', 'more'}
-        is_continuation = False
-        if self.last_grouped_results and user_question.strip().lower() in continuation_keywords:
-            if self.shown_count < len(self.last_grouped_results):
-                is_continuation = True
-
-        if is_continuation:
-            # 使用快取的結果進行分頁回應
-            return self._generate_response(
-                self.last_grouped_results, self.last_mode, 
-                self.last_target_grade, self.last_target_required, is_continuation=True
-            )
-
         # 1. 使用 RAG 檢索相關課程
         # 優化搜尋策略：使用更精確的關鍵詞組合
         import re
@@ -557,12 +536,7 @@ class CourseQuerySystem:
         context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
-        # 準備結果並儲存狀態
-        mode = 'llm'
-        
-        # 若有時間條件，進行額外過濾並切換至 deterministic 模式
         if time_condition.get('day') or time_condition.get('period'):
-            mode = 'deterministic'
             # 進一步依系所過濾：只依賴年級欄位
             if target_dept:
                 filtered = []
@@ -584,44 +558,10 @@ class CourseQuerySystem:
                         filtered.append(c)
                 if filtered:
                     relevant_courses = filtered
-        
-        # 將課程分組 (Grouping)
-        grouped_courses = self._group_courses(relevant_courses)
-        
-        # 儲存狀態以便分頁
-        self.last_grouped_results = grouped_courses
-        self.shown_count = 0
-        self.last_mode = mode
-        self.last_target_grade = target_grade
-        self.last_target_required = target_required
-        
-        # 生成第一頁回應
-        return self._generate_response(grouped_courses, mode, target_grade, target_required, is_continuation=False)
 
-    def _generate_response(self, grouped_courses: List[Dict], mode: str, target_grade: Optional[str], target_required: Optional[str], is_continuation: bool) -> str:
-        """
-        處理分頁並生成回應
-        """
-        batch_size = 5
-        max_display_limit = 50  # 設定最大顯示筆數
-        
-        current_batch = grouped_courses[self.shown_count : self.shown_count + batch_size]
-        self.shown_count += len(current_batch)
-        has_more = self.shown_count < len(grouped_courses)
-        # 檢查是否達到顯示上限
-        hit_limit = self.shown_count >= max_display_limit
-        
-        if not current_batch:
-            return "沒有找到符合條件的課程。"
-
-        if mode == 'deterministic':
-            lines = []
-            if not is_continuation:
-                lines.append("嗨！以下是符合你時間條件的課程：\n")
-            else:
-                lines.append("這是接下來的課程：\n")
-                
-            for g in current_batch:
+            groups = self._group_courses(relevant_courses)
+            lines = ["嗨！以下是符合你時間條件的課程：\n"]
+            for g in groups:
                 title_suffix = ""
                 if g['schedule']:
                     title_suffix += f"（{g['schedule']}）"
@@ -639,41 +579,84 @@ class CourseQuerySystem:
                 if g['grade']:
                     lines.append(f"年級：{g['grade']}")
                 lines.append("")  # blank line between courses
-            lines.append(f"共找到 {len(grouped_courses)} 門課程。")
-            
-            if has_more:
-                if hit_limit:
-                    lines.append(f"（已顯示 {self.shown_count} 筆，達到系統上限 50 筆）\n由於符合條件的課程過多，結果未完整顯示。請嘗試輸入更精確的關鍵字（例如加上系所、年級或必選修）來縮小搜尋範圍。")
-                    # 清除分頁狀態，停止繼續顯示
-                    self.last_grouped_results = []
-                else:
-                    lines.append(f"（已顯示 {self.shown_count}/{len(grouped_courses)} 筆）\n還有其他課程，請問是否繼續顯示？")
-            else:
-                lines.append(f"（共 {len(grouped_courses)} 筆課程皆已顯示完畢）")
+            lines.append(f"共找到 {len(groups)} 門課程。")
             return "\n".join(lines)
         
         # 4. 建立 prompt
-        # 建立 context（只包含當前批次的課程）
-        context = self._build_context([], target_grade=target_grade, target_required=target_required, grouped_courses=current_batch)
-        
-        # 根據分頁狀態調整 System Prompt 指令
-        pagination_instruction = ""
-        if has_more:
-            if hit_limit:
-                pagination_instruction = f"\n\n【系統提示】已顯示 {self.shown_count} 筆結果，達到系統顯示上限（共 {len(grouped_courses)} 筆）。請在回答最後明確告知使用者：「由於符合條件的課程過多，僅顯示前 {self.shown_count} 筆，結果未完整顯示。請嘗試輸入更精確的關鍵字（例如加上系所、年級或必選修）來縮小搜尋範圍。」"
-                # 清除分頁狀態，停止繼續顯示
-                self.last_grouped_results = []
-            else:
-                pagination_instruction = f"\n\n【系統提示】目前僅顯示部分結果（第 {self.shown_count - len(current_batch) + 1} 至 {self.shown_count} 筆，共 {len(grouped_courses)} 筆）。請在回答的最後，明確詢問使用者是否要繼續查看剩餘的課程（例如：「還有其他課程，需要繼續顯示嗎？」）。"
-        else:
-            pagination_instruction = f"\n\n【系統提示】這是最後一批課程（共 {len(grouped_courses)} 筆）。請在回答最後告知使用者課程皆已顯示完畢。"
+        system_prompt = """你是一個友善的課程查詢助手，專門協助學生查詢國立臺北大學的課程資訊。
 
-        system_prompt = self._get_system_prompt() + pagination_instruction
-        
-        user_prompt_content = "請顯示下一頁課程" if is_continuation else "查詢課程"
-        user_prompt = f"""使用者問題：{user_prompt_content}
+⚠️ 重要規則：
+1. 你必須完全根據提供的「相關課程資料」來回答，絕對不能編造、發明或猜測任何課程資訊
+2. 如果提供的資料中沒有某個資訊，就說「資料中未提供」，不要編造
+3. 只能使用「相關課程資料」中實際存在的課程，不能自己創造課程
 
-以下是相關課程資料（分頁顯示 {len(current_batch)} 筆）：
+回答時的指導原則：
+1. 使用繁體中文回答，語氣自然、像跟同學聊天，簡短問候開頭也可以（但不要太長）
+2. 仔細閱讀「相關課程資料」中的每一筆課程資訊
+3. 仔細閱讀課程資料中的必選修資訊：
+   - 重要：課程的必選修狀態可能因不同的年級/組別而不同
+   - 如果課程資料中有「年級組別與必選修對應」，這表示不同組別可能有不同的必選修狀態
+   - 例如：「經濟系1A：選修課程，經濟系1B：選修課程」表示對經濟系1A和1B來說是選修
+   - 如果標記為「✅ 對於 XX，這是必修課程」，表示對該組別來說是必修
+   - 如果標記為「📝 對於 XX，這是選修課程」，表示對該組別來說是選修
+   - 如果「必選修」欄位中包含「必」字（如「必選修：必|必」），且沒有特定組別標記，表示這是必修課程
+   - 如果「必選修」欄位中只有「選」字（如「必選修：選|選」），且沒有特定組別標記，表示這是選修課程
+4. 當使用者詢問「XX系XX年級的必修課程？」時，請：
+   - 特別注意課程資料中是否有針對該年級/組別的必選修標記
+   - 例如：如果用戶問「經濟系1A的必修課程」，只顯示標記為「✅ 對於 經濟系1A，這是必修課程」的課程
+   - 從「相關課程資料」中找出所有符合條件的課程
+   - 必須列出所有符合條件的課程，不要遺漏
+   - 對於每門課程，從「相關課程資料」中提取實際的資訊：課程名稱、課程代碼、教師、上課時間、學分數、年級等
+   - 如果有多門相同名稱的課程（例如不同教師開的專題製作），請全部列出
+5. 當使用者詢問「XX系有哪些必修課程？」（沒有指定年級）時，請：
+   - 顯示所有對任何組別來說是必修的課程
+   - 如果課程對不同組別有不同的必選修狀態，可以說明這一點
+5. **課程顯示邏輯（非常重要，必須嚴格遵守）**：
+   - **強制要求**：在顯示課程之前，必須先按照「課程名稱 + 上課時間 + 系所（含日間/進修/進修部字樣）」進行分組，日間與進修部絕對不可合併
+   - **優先順序**：先顯示課程名稱不同的課程
+   - **合併顯示規則（必須執行）**：
+     * 如果多筆課程的「課程名稱相同」且「上課時間完全相同」，則**必須合併為一筆顯示**
+     * 合併時，在「授課教師」欄位**必須**顯示所有教師，格式為：「教師A & 教師B & 教師C & 教師D 同時段皆有開課」
+     * 課程代碼**必須**列出所有，用逗號分隔（例如：U1017, U1166, U1011, U1012）
+     * **絕對不要**分開顯示相同課程名稱和相同上課時間的課程
+     * 例如：如果有4個「統計學」課程，都是「每週四2~4」，但教師不同（林定香、莊惠菁、朱是錯、謝璦如），課程代碼是（U1017, U1166, U1011, U1012），則**必須**合併顯示為：
+       ```
+       課程名稱：統計學 / Statistics
+       課程代碼：U1017, U1166, U1011, U1012
+       授課教師：林定香 & 莊惠菁 & 朱是鍇 & 謝璦如 同時段皆有開課
+       系所：統計系
+       必選修類型：必修
+       上課時間：每週四2~4
+       學分數：3
+       年級：統計系1
+       ```
+   - **分開顯示規則**：
+     * 如果課程名稱相同但「上課時間不同」，則分開顯示，每筆獨立列出
+     * 例如：如果有2個「統計學」課程，一個是「每週四2~4」，另一個是「每週五3~5」，則分開顯示兩筆
+   - **顯示格式**：每筆課程必須包含：
+     * 課程名稱、課程代碼（必須是資料中實際的課程代碼，合併時列出所有）
+     * 授課教師（必須是資料中實際的教師姓名，合併時使用「&」連接並加上「同時段皆有開課」）
+     * 系所、必選修類型（明確標示為「必修」）
+     * 上課時間、學分數、年級（必須是資料中實際的資訊）
+6. 如果課程資料中有標記「✅ 這是必修課程」，這表示該課程確實是必修課程，請務必包含在回答中
+7. 如果使用者詢問時間相關的問題（例如「週二早上」、「下午」），請只列出符合時間條件的課程
+   - 例如：如果使用者問「週二早上」的課程，只顯示上課時間包含「週二」且節次為1-4節的課程
+   - 如果使用者問「下午」的課程，只顯示節次為5-8節的課程
+   - 如果使用者問「晚上」的課程，只顯示節次為9-12節的課程
+8. 只有在「相關課程資料」中完全沒有任何符合條件的課程時，才告訴使用者沒有找到
+9. 可以根據課程限制、選課人數等資訊提供建議
+10. **重要**：計算和顯示課程數量時：
+   - 請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
+   - 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共找到 2 個符合條件的課程」或「共 2 門不同的課程」
+   - 不要顯示「前 N 個」，而是顯示實際合併後的課程數量
+
+重要提醒：
+- 當你看到「相關課程資料」中有多筆標記為「✅ 這是必修課程」且系所為「資工系」的課程時，你必須全部列出，不要忽略任何一筆！
+- 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！"""
+        
+        user_prompt = f"""使用者問題：{user_question}
+
+以下是相關課程資料（已過濾出符合條件的課程，共 {len(relevant_courses)} 筆）：
 {context}
 
 請仔細閱讀以上課程資料，並根據實際資料回答使用者的問題。
@@ -736,12 +719,21 @@ class CourseQuerySystem:
   * 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共 2 個課程」或「共找到 2 門不同的課程」
   * 不要顯示「前 5 個」，而是顯示實際合併後的課程數量，例如「共找到 2 個符合條件的課程」
   
-補充:
+補充1:
 若提問者講了跟課程無關的內容，會禮貌回應並導引至「想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」」這方向。
 -回應「閉嘴、不要」等負面且與課程無關之用詞，可以禮貌、中性回應，比如「好，了解，若之後有需要幫忙可以再關鍵字查詢」。
 -回應「感謝、謝謝」等正面且與課程無關之用詞，可以禮貌回復比如「不客氣，若之後有需要幫忙可以再關鍵字查詢」。
 -其他回應諸如「今天天氣真好」或其他與課程無關之用詞，也一樣禮貌且精簡回應，並帶回預設之方向。
 -可以依語氣語意需求，做合理修正，讓前後語意語氣流暢通順。
+-回應要注意脈絡，有時候使用者的回應是依據前一個回答所回覆的。
+-若是無關之符號也是一樣導向課程查詢。
+-不要無關的提問或回應就隨意給課程。
+
+補充2:
+-每次課程顯示最多10筆，若10筆了還未完全顯示完整，則在後面告知還有未顯示的課程。
+-所有課程顯示完，也要在最後告知。
+-若課程超過30筆，則依上述方式顯示到第30筆，並在最後告知雖有未顯示的課程，但要求使用者調整提問方式，避免查詢範圍過大。
+
   """
         
         # 4. 呼叫 LLM 生成回答
@@ -762,27 +754,20 @@ class CourseQuerySystem:
         except Exception as e:
             return f"❌ 查詢時發生錯誤：{str(e)}"
     
-    def _build_context(self, courses: List[Dict], target_grade: Optional[str] = None, target_required: Optional[str] = None, grouped_courses: List[Dict] = None) -> str:
+    def _build_context(self, courses: List[Dict], target_grade: Optional[str] = None, target_required: Optional[str] = None) -> str:
         """
         將檢索到的課程資料格式化為 context
         
         Args:
             courses: 檢索到的課程列表
-            grouped_courses: 已分組的課程列表 (若提供則優先使用)
             
         Returns:
             格式化的 context 文字
         """
-        if grouped_courses is None:
-            if not courses:
-                return "未找到相關課程。"
-            grouped = self._group_courses(courses)
-        else:
-            grouped = grouped_courses
-            
-        if not grouped:
+        if not courses:
             return "未找到相關課程。"
-            
+        
+        grouped = self._group_courses(courses)
         context_parts = []
         for i, info in enumerate(grouped, 1):
             context_parts.append(f"\n【課程 {i}】")
@@ -872,77 +857,6 @@ class CourseQuerySystem:
                 grouped[key]['grade'] = grade
         return list(grouped.values())
 
-    def _get_system_prompt(self) -> str:
-        return """你是一個友善的課程查詢助手，專門協助學生查詢國立臺北大學的課程資訊。
-
-⚠️ 重要規則：
-1. 你必須完全根據提供的「相關課程資料」來回答，絕對不能編造、發明或猜測任何課程資訊
-2. 如果提供的資料中沒有某個資訊，就說「資料中未提供」，不要編造
-3. 只能使用「相關課程資料」中實際存在的課程，不能自己創造課程
-
-回答時的指導原則：
-1. 使用繁體中文回答，語氣自然、像跟同學聊天，簡短問候開頭也可以（但不要太長）
-2. 仔細閱讀「相關課程資料」中的每一筆課程資訊
-3. 仔細閱讀課程資料中的必選修資訊：
-   - 重要：課程的必選修狀態可能因不同的年級/組別而不同
-   - 如果課程資料中有「年級組別與必選修對應」，這表示不同組別可能有不同的必選修狀態
-   - 例如：「經濟系1A：選修課程，經濟系1B：選修課程」表示對經濟系1A和1B來說是選修
-   - 如果標記為「✅ 對於 XX，這是必修課程」，表示對該組別來說是必修
-   - 如果標記為「📝 對於 XX，這是選修課程」，表示對該組別來說是選修
-   - 如果「必選修」欄位中包含「必」字（如「必選修：必|必」），且沒有特定組別標記，表示這是必修課程
-   - 如果「必選修」欄位中只有「選」字（如「必選修：選|選」），且沒有特定組別標記，表示這是選修課程
-4. 當使用者詢問「XX系XX年級的必修課程？」時，請：
-   - 特別注意課程資料中是否有針對該年級/組別的必選修標記
-   - 例如：如果用戶問「經濟系1A的必修課程」，只顯示標記為「✅ 對於 經濟系1A，這是必修課程」的課程
-   - 從「相關課程資料」中找出所有符合條件的課程
-   - 必須列出所有符合條件的課程，不要遺漏
-   - 對於每門課程，從「相關課程資料」中提取實際的資訊：課程名稱、課程代碼、教師、上課時間、學分數、年級等
-   - 如果有多門相同名稱的課程（例如不同教師開的專題製作），請全部列出
-5. 當使用者詢問「XX系有哪些必修課程？」（沒有指定年級）時，請：
-   - 顯示所有對任何組別來說是必修的課程
-   - 如果課程對不同組別有不同的必選修狀態，可以說明這一點
-5. **課程顯示邏輯（非常重要，必須嚴格遵守）**：
-   - **強制要求**：在顯示課程之前，必須先按照「課程名稱 + 上課時間 + 系所（含日間/進修/進修部字樣）」進行分組，日間與進修部絕對不可合併
-   - **優先順序**：先顯示課程名稱不同的課程
-   - **合併顯示規則（必須執行）**：
-     * 如果多筆課程的「課程名稱相同」且「上課時間完全相同」，則**必須合併為一筆顯示**
-     * 合併時，在「授課教師」欄位**必須**顯示所有教師，格式為：「教師A & 教師B & 教師C & 教師D 同時段皆有開課」
-     * 課程代碼**必須**列出所有，用逗號分隔（例如：U1017, U1166, U1011, U1012）
-     * **絕對不要**分開顯示相同課程名稱和相同上課時間的課程
-     * 例如：如果有4個「統計學」課程，都是「每週四2~4」，但教師不同（林定香、莊惠菁、朱是錯、謝璦如），課程代碼是（U1017, U1166, U1011, U1012），則**必須**合併顯示為：
-       ```
-       課程名稱：統計學 / Statistics
-       課程代碼：U1017, U1166, U1011, U1012
-       授課教師：林定香 & 莊惠菁 & 朱是錯 & 謝璦如 同時段皆有開課
-       系所：統計系
-       必選修類型：必修
-       上課時間：每週四2~4
-       學分數：3
-       年級：統計系1
-       ```
-   - **分開顯示規則**：
-     * 如果課程名稱相同但「上課時間不同」，則分開顯示，每筆獨立列出
-     * 例如：如果有2個「統計學」課程，一個是「每週四2~4」，另一個是「每週五3~5」，則分開顯示兩筆
-   - **顯示格式**：每筆課程必須包含：
-     * 課程名稱、課程代碼（必須是資料中實際的課程代碼，合併時列出所有）
-     * 授課教師（必須是資料中實際的教師姓名，合併時使用「&」連接並加上「同時段皆有開課」）
-     * 系所、必選修類型（明確標示為「必修」）
-     * 上課時間、學分數、年級（必須是資料中實際的資訊）
-6. 如果課程資料中有標記「✅ 這是必修課程」，這表示該課程確實是必修課程，請務必包含在回答中
-7. 如果使用者詢問時間相關的問題（例如「週二早上」、「下午」），請只列出符合時間條件的課程
-   - 例如：如果使用者問「週二早上」的課程，只顯示上課時間包含「週二」且節次為1-4節的課程
-   - 如果使用者問「下午」的課程，只顯示節次為5-8節的課程
-   - 如果使用者問「晚上」的課程，只顯示節次為9-12節的課程
-8. 只有在「相關課程資料」中完全沒有任何符合條件的課程時，才告訴使用者沒有找到
-9. 可以根據課程限制、選課人數等資訊提供建議
-10. **重要**：計算和顯示課程數量時：
-   - 請按照「合併後的課程名稱」來計算，不是按照原始資料筆數
-   - 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共 2 個課程」或「共找到 2 門不同的課程」
-   - 不要顯示「前 N 個」，而是顯示實際合併後的課程數量，例如「共找到 2 個符合條件的課程」
-
-重要提醒：
-- 當你看到「相關課程資料」中有多筆標記為「✅ 這是必修課程」且系所為「資工系」的課程時，你必須全部列出，不要忽略任何一筆！
-- 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！"""
 
 if __name__ == "__main__":
     # 測試查詢系統
