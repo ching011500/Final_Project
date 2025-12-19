@@ -317,17 +317,37 @@ class CourseQuerySystem:
         def grade_has_target_dept(grade_text: str, target_dept: str) -> bool:
             if not grade_text or not target_dept:
                 return False
+            
+            # 擴充目標系所名稱，處理別名與全稱
+            targets = {target_dept}
+            if target_dept.endswith('系'):
+                short = target_dept[:-1]
+                targets.add(short)
+                # 常見縮寫對應全稱
+                aliases = {
+                    '資工': '資訊工程', '通訊': '通訊工程', '電機': '電機工程',
+                    '企管': '企業管理', '資管': '資訊管理', '公行': '公共行政',
+                    '不動': '不動產', '休運': '休閒運動', '社工': '社會工作',
+                    '財法': '財經法律', '運管': '運動管理'
+                }
+                if short in aliases:
+                    targets.add(aliases[short])
+                    targets.add(aliases[short] + '系')
+
             tokens = re.split(r'[\\|,，/\\s]+', grade_text)
             for tk in tokens:
                 if not tk:
                     continue
-                if tk.startswith(target_dept):
-                    # 下一字元必須是年級/碩別/組別，而非其他系名的延伸（如「通訊系統…」）
-                    if len(tk) == len(target_dept):
-                        return True
-                    next_ch = tk[len(target_dept):len(target_dept)+1]
-                    if next_ch and next_ch in '123456789碩一二三四ABCDEFX':
-                        return True
+                for t in targets:
+                    if tk.startswith(t):
+                        if len(tk) == len(t):
+                            return True
+                        # 檢查後續字元：允許接系、所、碩、博、數字、英文、班、組
+                        if tk[len(t)] in '系所碩博班組123456789ABCDEF':
+                            return True
+                        # 特殊：若 t 為簡稱（如通訊），允許接工程
+                        if t in ['通訊', '資訊', '電機'] and tk[len(t):].startswith('工程'):
+                            return True
             return False
 
         filtered_courses = []  # 初始化 filtered_courses
