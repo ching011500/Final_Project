@@ -297,22 +297,27 @@ class CourseQuerySystem:
         def grade_has_target_dept(grade_text: str, target_dept: str) -> bool:
             if not grade_text or not target_dept:
                 return False
+            
+            # 建立不含「系」的短版本，用於匹配省略「系」的情況（如「法律1」）
+            target_dept_short = target_dept.replace('系', '') if '系' in target_dept else target_dept
+            
             tokens = re.split(r'[\\|,，/\\s]+', grade_text)
             for tk in tokens:
                 if not tk:
                     continue
+                
+                # 1. 精確匹配完整系名 (e.g. "法律系" matches "法律系...")
                 if tk.startswith(target_dept):
-                    # 下一字元必須是年級/碩別/組別，而非其他系名的延伸（如「通訊系統…」）
-                    if len(tk) == len(target_dept):
+                    return True
+                
+                # 2. 匹配短版本 (e.g. "法律" matches "法律1", "法律法學組")
+                if tk.startswith(target_dept_short):
+                    if len(tk) == len(target_dept_short):
                         return True
-                    
-                    # 如果 target_dept 包含「系」，則視為精確匹配前綴，允許後續接任何分組字元（解決法律系分組問題）
-                    if '系' in target_dept:
-                        return True
-
-                    next_ch = tk[len(target_dept):len(target_dept)+1]
+                    next_ch = tk[len(target_dept_short)]
                     # 允許：數字、碩、年級、班級、組別、系
-                    if next_ch and next_ch in '1234567890碩一二三四ABCDEFX系':
+                    # 特別加入法律系常見分組字首：法、司、財
+                    if next_ch in '1234567890碩一二三四ABCDEFX系法司財':
                         return True
             return False
 
@@ -399,6 +404,15 @@ class CourseQuerySystem:
                                 is_required = True
                                 grade_required = target_required  # 設置 grade_required 以便後續使用
                                 break
+                    
+                    # 如果有 target_grade 但無法確定 grade_required (例如法律系分組導致匹配失敗)，嘗試退回使用 meta_required
+                    if is_required is False and target_grade and grade_required is None:
+                        meta_required = metadata.get('required', '')
+                        if target_required == '必' and '必' in meta_required:
+                            is_required = True
+                        elif target_required == '選' and '選' in meta_required:
+                            is_required = True
+                            
                     elif need_required_filter and not target_grade:
                         # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
                         meta_required = metadata.get('required', '')

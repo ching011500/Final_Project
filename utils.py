@@ -361,10 +361,13 @@ def check_grade_required_from_json(course: Dict, target_grade: str) -> Optional[
             for grade_item, required_item in mapping:
                 if grade_item.startswith(target_grade):
                     diff = grade_item[len(target_grade):].strip()
-                    # 如果差異是一個字母（A, B, C, D），這是有效的匹配
-                    # 例如：「經濟系1」匹配「經濟系1A」
-                    # 例如：「資工系碩1」匹配「資工碩1A」（如果資料庫中是「資工碩1A」格式）
-                    if len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']:
+                    # 允許：
+                    # 1. 單個字母 (A, B...)
+                    # 2. 非數字開頭的字串 (法學組, 智財組...) -> 避免 1 匹配 11
+                    # 3. 空字串 (完全匹配)
+                    if len(diff) == 0 or \
+                       (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
+                       (len(diff) > 0 and not diff[0].isdigit()):
                         if '必' in required_item:
                             return '必'
                         elif '選' in required_item:
@@ -610,4 +613,3 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
             pass
     
     return results
-
