@@ -18,6 +18,7 @@ from utils import (
     get_grade_required_info,
     check_grade_required,
     check_grade_required_from_json,
+    check_grades_required_from_json,
     extract_time_from_query,
     check_time_match
 )
@@ -172,23 +173,28 @@ class CourseQuerySystem:
         # 如果沒有 grade，使用包含必選修的關鍵詞
         # 對於碩士班，也搜尋「專題研討」或「Seminar」相關課程
         if target_dept:
+            # 特殊處理：法律系搜尋擴展，確保能搜尋到各組別（法學、司法、財法）
+            search_dept_term = target_dept
+            if '法律' in target_dept:
+                search_dept_term = f"{target_dept} 法學組 司法組 財經法學組"
+            
             if target_grade:
                 # 有 grade：使用系所 + grade + 必選修關鍵詞（提高召回率）
                 if '必修' in user_question:
-                    primary_search_query = f"{target_dept} {target_grade} 必修"
+                    primary_search_query = f"{search_dept_term} {target_grade} 必修"
                 elif '選修' in user_question:
-                    primary_search_query = f"{target_dept} {target_grade} 選修"
+                    primary_search_query = f"{search_dept_term} {target_grade} 選修"
                 else:
                     # 沒有必選修關鍵詞，使用系所 + grade
-                    primary_search_query = f"{target_dept} {target_grade}"
+                    primary_search_query = f"{search_dept_term} {target_grade}"
             else:
                 # 沒有 grade：使用系所 + 必選修關鍵詞
                 if '必修' in user_question:
-                    primary_search_query = f"{target_dept} 必修"
+                    primary_search_query = f"{search_dept_term} 必修"
                 elif '選修' in user_question:
-                    primary_search_query = f"{target_dept} 選修"
+                    primary_search_query = f"{search_dept_term} 選修"
                 else:
-                    primary_search_query = target_dept
+                    primary_search_query = search_dept_term
         else:
             primary_search_query = user_question
         
@@ -298,6 +304,11 @@ class CourseQuerySystem:
             if not grade_text or not target_dept:
                 return False
             
+            # 特殊處理：法律系包含法學組、司法組、財經法學組
+            if '法律' in target_dept:
+                if any(k in grade_text for k in ['法學', '司法', '財法', '法律']):
+                    return True
+            
             # 建立不含「系」的短版本，用於匹配省略「系」的情況（如「法律1」）
             target_dept_short = target_dept.replace('系', '') if '系' in target_dept else target_dept
             
@@ -352,9 +363,44 @@ class CourseQuerySystem:
                     
                     if target_grade and mapping_json:
                         # 使用 JSON 欄位進行高效查詢
+                        # 改用 check_grades_required_from_json 取得所有匹配
+                        # 這樣可以處理「經濟系1」同時匹配「經濟系1A(必)」和「經濟系1B(選)」的情況
                         course_dict = {'grade_required_mapping': mapping_json}
-                        # 檢查是否匹配（例如「經濟系1」會匹配「經濟系1A」、「經濟系1B」等）
-                        grade_required = check_grade_required_from_json(course_dict, target_grade)
+                        all_matches = check_grades_required_from_json(course_dict, target_grade)
+                        
+                        if all_matches:
+                            # 如果有匹配，檢查是否符合 target_required
+                            if target_required:
+                                # 檢查是否有任何一個匹配符合要求
+                                for _, req_status in all_matches:
+                                    if req_status == target_required:
+                                        grade_required = target_required
+                                        break
+                                # 如果沒有找到符合的，但有匹配結果，則 grade_required 設為第一個匹配的狀態
+                                if grade_required is None:
+                                    grade_required = all_matches[0][1]
+                            else:
+                                # 沒有 target_required，只要有匹配就視為符合 grade
+                                grade_required = all_matches[0][1]
+                        
+                        # 特殊處理：法律系 (如果標準匹配失敗)
+                        if not all_matches and '法律' in target_grade:
+                            try:
+                                m_data = json.loads(mapping_json)
+                                mapping = m_data.get('mapping', [])
+                                import re
+                                num_match = re.search(r'\d+', target_grade)
+                                target_num = num_match.group(0) if num_match else ''
+                                for g_item, r_item in mapping:
+                                    if any(k in g_item for k in ['法學', '司法', '財法', '法律']):
+                                        if not target_num or target_num in g_item:
+                                            req_status = '必' if '必' in r_item else '選' if '選' in r_item else r_item
+                                            if not target_required or req_status == target_required:
+                                                grade_required = req_status
+                                                break
+                            except:
+                                pass
+
                     elif target_grade:
                         # 傳統方式：從 metadata 或 document 中取得 grade 和 required
                         grade = metadata.get('grade', '')
@@ -392,18 +438,6 @@ class CourseQuerySystem:
                     elif target_grade and grade_required is not None:
                         # 有 grade 要求但沒有必選修要求，只要有對應的 grade 就通過
                         is_required = True
-                    elif target_grade and target_required and mapping_json and grade_required is None:
-                        # 特殊情況：當 target_grade 是「經濟系1」時，grade_required 可能是 None
-                        # 需要檢查所有匹配（1A、1B等）
-                        from utils import check_grades_required_from_json
-                        course_dict = {'grade_required_mapping': mapping_json}
-                        all_matches = check_grades_required_from_json(course_dict, target_grade)
-                        # 檢查是否有任何匹配符合必選修要求
-                        for grade_item, required_status in all_matches:
-                            if required_status == target_required:
-                                is_required = True
-                                grade_required = target_required  # 設置 grade_required 以便後續使用
-                                break
                     
                     # 如果有 target_grade 但無法確定 grade_required (例如法律系分組導致匹配失敗)，嘗試退回使用 meta_required
                     if is_required is False and target_grade and grade_required is None:
@@ -836,6 +870,22 @@ class CourseQuerySystem:
                 if not status:
                     status = check_grade_required(dummy_course, target_grade)
                 
+                # 特殊處理：法律系 fallback
+                if not status and '法律' in target_grade:
+                    try:
+                        m_data = json.loads(info.get('grade_required_mapping', '{}'))
+                        mapping = m_data.get('mapping', [])
+                        import re
+                        num_match = re.search(r'\d+', target_grade)
+                        target_num = num_match.group(0) if num_match else ''
+                        for g_item, r_item in mapping:
+                            if any(k in g_item for k in ['法學', '司法', '財法', '法律']):
+                                if not target_num or target_num in g_item:
+                                    status = '必' if '必' in r_item else '選' if '選' in r_item else r_item
+                                    break
+                    except:
+                        pass
+                
                 if status == '必':
                     context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
                 elif status == '選':
@@ -845,8 +895,13 @@ class CourseQuerySystem:
             
             elif target_dept:
                 # 如果有指定系所（但無年級），顯示該系所的必選修狀態
-                dept_reqs = [g for g in req_groups if target_dept in g]
-                dept_eles = [g for g in ele_groups if target_dept in g]
+                if '法律' in target_dept:
+                    # 法律系統籌：顯示所有法律相關組別（法學、司法、財法）
+                    dept_reqs = [g for g in req_groups if any(k in g for k in ['法學', '司法', '財法', '法律'])]
+                    dept_eles = [g for g in ele_groups if any(k in g for k in ['法學', '司法', '財法', '法律'])]
+                else:
+                    dept_reqs = [g for g in req_groups if target_dept in g]
+                    dept_eles = [g for g in ele_groups if target_dept in g]
                 
                 if dept_reqs:
                     context_parts.append(f"✅ 對於 {target_dept}（{', '.join(dept_reqs)}）是必修")
