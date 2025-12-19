@@ -219,6 +219,26 @@ class CourseQuerySystem:
         # 提取時間條件
         time_condition = extract_time_from_query(user_question)
         
+        # 處理週末邏輯
+        if '週末' in user_question or '周末' in user_question or '假日' in user_question:
+            time_condition['is_weekend'] = True
+
+        # 定義本地時間檢查函數，支援週末
+        def local_check_time_match(schedule: str, condition: Dict) -> bool:
+            if condition.get('is_weekend'):
+                # 必須包含六或日
+                if '六' not in schedule and '日' not in schedule:
+                    return False
+                # 如果有節次條件，分別檢查週六或週日
+                if condition.get('period'):
+                    c_sat = condition.copy()
+                    c_sat['day'] = '六'
+                    c_sun = condition.copy()
+                    c_sun['day'] = '日'
+                    return check_time_match(schedule, c_sat) or check_time_match(schedule, c_sun)
+                return True
+            return check_time_match(schedule, condition)
+        
         # 擴大搜尋範圍，取得更多候選課程
         # 時間條件與年級/必修/系所都會適度放大，避免漏掉跨時段課
         if target_grade:
@@ -231,7 +251,7 @@ class CourseQuerySystem:
         else:
             search_n_results = n_results * 5
         # 如果有時間條件，進一步放大
-        if time_condition.get('day') or time_condition.get('period'):
+        if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
             search_n_results = max(search_n_results, n_results * 10)
         
         # 對於碩士班必修查詢，也使用「專題研討」或「Seminar」作為搜尋關鍵詞
@@ -257,7 +277,7 @@ class CourseQuerySystem:
             relevant_courses = combined_results
         else:
             # 如果有明確的時間條件，直接全庫掃描以免漏抓不同時段
-            if time_condition.get('day') or time_condition.get('period'):
+            if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
                 relevant_courses = []
                 try:
                     total = self.rag_system.collection.count()
@@ -274,7 +294,7 @@ class CourseQuerySystem:
                             schedule = md.get('schedule', '')
                             if not schedule:
                                 continue
-                            if not check_time_match(schedule, time_condition):
+                            if not local_check_time_match(schedule, time_condition):
                                 continue
                             relevant_courses.append({
                                 'document': doc,
@@ -414,10 +434,10 @@ class CourseQuerySystem:
                 
                 # 檢查時間條件
                 time_matches = True
-                if time_condition.get('day') or time_condition.get('period'):
+                if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
                     schedule = metadata.get('schedule', '')
                     if schedule:
-                        time_matches = check_time_match(schedule, time_condition)
+                        time_matches = local_check_time_match(schedule, time_condition)
                     else:
                         # 如果沒有 schedule 資訊，但查詢中有時間條件，則不符合
                         time_matches = False
@@ -443,8 +463,8 @@ class CourseQuerySystem:
                         # 只檢查年級欄位
                         dept_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
                     time_ok = True
-                    if time_condition.get('day') or time_condition.get('period'):
-                        time_ok = check_time_match(schedule, time_condition) if schedule else False
+                    if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
+                        time_ok = local_check_time_match(schedule, time_condition) if schedule else False
                     
                     if dept_ok and time_ok:
                         relaxed.append(course)
@@ -455,12 +475,12 @@ class CourseQuerySystem:
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         else:
             # 沒有系所/年級/必修條件，但有時間條件時也要過濾時間
-            if time_condition.get('day') or time_condition.get('period'):
+            if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
                 time_filtered = []
                 for course in relevant_courses:
                     metadata = course.get('metadata', {})
                     schedule = metadata.get('schedule', '')
-                    if schedule and check_time_match(schedule, time_condition):
+                    if schedule and local_check_time_match(schedule, time_condition):
                         time_filtered.append(course)
                 if time_filtered:
                     relevant_courses = time_filtered[:n_results * 2]
@@ -468,7 +488,7 @@ class CourseQuerySystem:
                     return f"很抱歉，沒有找到符合條件的課程。請嘗試調整查詢條件。"
         
         # 時間條件補強：若結果太少，再全量掃描一次 collection 依時間/系所（與必修需求）補充
-        if time_condition.get('day') or time_condition.get('period'):
+        if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
             if len(relevant_courses) < n_results:
                 try:
                     total = self.rag_system.collection.count()
@@ -485,7 +505,7 @@ class CourseQuerySystem:
                             if not schedule:
                                 continue
                             # 時間匹配
-                            if not check_time_match(schedule, time_condition):
+                            if not local_check_time_match(schedule, time_condition):
                                 continue
                             # 系所匹配（若有）：只依賴年級欄位
                             if target_dept:
@@ -536,7 +556,7 @@ class CourseQuerySystem:
         context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
-        if time_condition.get('day') or time_condition.get('period'):
+        if time_condition.get('day') or time_condition.get('period') or time_condition.get('is_weekend'):
             # 進一步依系所過濾：只依賴年級欄位
             if target_dept:
                 filtered = []
@@ -867,4 +887,3 @@ if __name__ == "__main__":
         answer = query_system.query(question, n_results=3)
         print(f"💬 回答：{answer}")
         print("-" * 50)
-
