@@ -343,7 +343,7 @@ class CourseQuerySystem:
                         if len(tk) == len(t):
                             return True
                         # 檢查後續字元：允許接系、所、碩、博、數字、英文、班、組
-                        if tk[len(t)] in '系所碩博班組123456789ABCDEF':
+                        if tk[len(t)] in '系所碩博班組1234567890ABCDEF一二三四五六七八九必選':
                             return True
                         # 特殊：若 t 為簡稱（如通訊），允許接工程
                         if t in ['通訊', '資訊', '電機'] and tk[len(t):].startswith('工程'):
@@ -384,6 +384,10 @@ class CourseQuerySystem:
                         course_dict = {'grade_required_mapping': mapping_json}
                         # 檢查是否匹配（例如「經濟系1」會匹配「經濟系1A」、「經濟系1B」等）
                         grade_required = check_grade_required_from_json(course_dict, target_grade)
+                        # 嘗試放寬匹配：移除「系」字（處理「通訊系1」vs「通訊1」的情況）
+                        if grade_required is None and '系' in target_grade:
+                            relaxed_grade = target_grade.replace('系', '')
+                            grade_required = check_grade_required_from_json(course_dict, relaxed_grade)
                     elif target_grade:
                         # 傳統方式：從 metadata 或 document 中取得 grade 和 required
                         grade = metadata.get('grade', '')
@@ -403,6 +407,10 @@ class CourseQuerySystem:
                         if grade and required:
                             course_dict = {'grade': grade, 'required': required}
                             grade_required = check_grade_required(course_dict, target_grade)
+                            # 嘗試放寬匹配：移除「系」字
+                            if grade_required is None and '系' in target_grade:
+                                relaxed_grade = target_grade.replace('系', '')
+                                grade_required = check_grade_required(course_dict, relaxed_grade)
                         # 如果還是沒有 grade 和 required，嘗試從 document 中解析 JSON
                         elif mapping_json:
                             # 如果 metadata 中沒有但 document 中有，嘗試解析
@@ -438,7 +446,7 @@ class CourseQuerySystem:
                         meta_required = metadata.get('required', '')
                         if target_required == '必' and meta_required and '必' in meta_required:
                             is_required = True
-                        elif target_required == '選' and meta_required and ('選' in meta_required and '必' not in meta_required):
+                        elif target_required == '選' and meta_required and '選' in meta_required:
                             is_required = True
                         elif '必選修：' in document:
                             required_match = re.search(r'必選修：([^\n]+)', document)
@@ -447,7 +455,22 @@ class CourseQuerySystem:
                                 if target_required == '必':
                                     is_required = '必' in required_text
                                 elif target_required == '選':
-                                    is_required = '選' in required_text and '必' not in required_text
+                                    is_required = '選' in required_text
+                        
+                        # 如果上述檢查仍未通過，但有 mapping_json，嘗試從中檢查是否有任何組別符合
+                        if not is_required and mapping_json:
+                            try:
+                                mapping_data = json.loads(mapping_json)
+                                mapping = mapping_data.get('mapping', [])
+                                for _, req in mapping:
+                                    if target_required == '必' and '必' in req:
+                                        is_required = True
+                                        break
+                                    elif target_required == '選' and '選' in req:
+                                        is_required = True
+                                        break
+                            except:
+                                pass
                         # 注意：如果已經有 target_grade，不應該使用這個傳統方式檢查
                         # 因為這個方式無法檢查特定年級的必選修狀態
                         # 只有在沒有 target_grade 的情況下才使用
