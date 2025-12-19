@@ -305,8 +305,14 @@ class CourseQuerySystem:
                     # 下一字元必須是年級/碩別/組別，而非其他系名的延伸（如「通訊系統…」）
                     if len(tk) == len(target_dept):
                         return True
+                    
+                    # 如果 target_dept 包含「系」，則視為精確匹配前綴，允許後續接任何分組字元（解決法律系分組問題）
+                    if '系' in target_dept:
+                        return True
+
                     next_ch = tk[len(target_dept):len(target_dept)+1]
-                    if next_ch and next_ch in '123456789碩一二三四ABCDEFX':
+                    # 允許：數字、碩、年級、班級、組別、系
+                    if next_ch and next_ch in '1234567890碩一二三四ABCDEFX系':
                         return True
             return False
 
@@ -398,7 +404,7 @@ class CourseQuerySystem:
                         meta_required = metadata.get('required', '')
                         if target_required == '必' and meta_required and '必' in meta_required:
                             is_required = True
-                        elif target_required == '選' and meta_required and ('選' in meta_required and '必' not in meta_required):
+                        elif target_required == '選' and meta_required and '選' in meta_required:
                             is_required = True
                         elif '必選修：' in document:
                             required_match = re.search(r'必選修：([^\n]+)', document)
@@ -407,7 +413,7 @@ class CourseQuerySystem:
                                 if target_required == '必':
                                     is_required = '必' in required_text
                                 elif target_required == '選':
-                                    is_required = '選' in required_text and '必' not in required_text
+                                    is_required = '選' in required_text
                         # 注意：如果已經有 target_grade，不應該使用這個傳統方式檢查
                         # 因為這個方式無法檢查特定年級的必選修狀態
                         # 只有在沒有 target_grade 的情況下才使用
@@ -533,7 +539,7 @@ class CourseQuerySystem:
 
         # 3. 建立 context（相關課程資訊）
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
-        context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required)
+        context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required, target_dept=target_dept)
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
         if time_condition.get('day') or time_condition.get('period'):
@@ -755,7 +761,7 @@ class CourseQuerySystem:
         except Exception as e:
             return f"❌ 查詢時發生錯誤：{str(e)}"
     
-    def _build_context(self, courses: List[Dict], target_grade: Optional[str] = None, target_required: Optional[str] = None) -> str:
+    def _build_context(self, courses: List[Dict], target_grade: Optional[str] = None, target_required: Optional[str] = None, target_dept: Optional[str] = None) -> str:
         """
         將檢索到的課程資料格式化為 context
         
@@ -798,18 +804,62 @@ class CourseQuerySystem:
                 match = re.search(r'必選修：([^\n]+)', document_combined)
                 if match:
                     show_required = match.group(1).strip()
-            if not target_grade:
-                if show_required:
-                    if '必' in show_required:
-                        context_parts.append(f"✅ 這是必修課程（必選修：{show_required}）")
-                    elif '選' in show_required and '必' not in show_required:
-                        context_parts.append(f"📝 這是選修課程（必選修：{show_required}）")
+            
+            # 取得詳細的必選修對應資訊
+            mapping_info = get_grade_required_info(info)
+            req_groups = mapping_info.get('required_groups', [])
+            ele_groups = mapping_info.get('elective_groups', [])
+            
+            if target_grade:
+                # 如果有指定年級，嘗試判斷該年級的必選修狀態
+                status = None
+                dummy_course = {
+                    'grade': info['grade'],
+                    'required': info['required'],
+                    'grade_required_mapping': info.get('grade_required_mapping', '')
+                }
+                status = check_grade_required_from_json(dummy_course, target_grade)
+                if not status:
+                    status = check_grade_required(dummy_course, target_grade)
+                
+                if status == '必':
+                    context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
+                elif status == '選':
+                    context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
+                elif show_required:
+                    context_parts.append(f"必選修：{show_required}")
+            
+            elif target_dept:
+                # 如果有指定系所（但無年級），顯示該系所的必選修狀態
+                dept_reqs = [g for g in req_groups if target_dept in g]
+                dept_eles = [g for g in ele_groups if target_dept in g]
+                
+                if dept_reqs:
+                    context_parts.append(f"✅ 對於 {target_dept}（{', '.join(dept_reqs)}）是必修")
+                if dept_eles:
+                    context_parts.append(f"📝 對於 {target_dept}（{', '.join(dept_eles)}）是選修")
+                
+                if not dept_reqs and not dept_eles and show_required:
+                    context_parts.append(f"必選修：{show_required}")
+            
             else:
-                if show_required:
-                    if '必' in show_required:
-                        context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
-                    elif '選' in show_required and '必' not in show_required:
-                        context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
+                # 一般查詢，列出所有必選修對象
+                has_mapping = False
+                if req_groups:
+                    context_parts.append(f"✅ 必修系級：{', '.join(req_groups)}")
+                    has_mapping = True
+                if ele_groups:
+                    context_parts.append(f"📝 選修系級：{', '.join(ele_groups)}")
+                    has_mapping = True
+                
+                if not has_mapping and show_required:
+                    if '必' in show_required and '選' in show_required:
+                        context_parts.append(f"⚠️ 部分必修/部分選修（必選修：{show_required}）")
+                    elif '必' in show_required:
+                        context_parts.append(f"✅ 這是必修課程（必選修：{show_required}）")
+                    elif '選' in show_required:
+                        context_parts.append(f"📝 這是選修課程（必選修：{show_required}）")
+            
             context_parts.append(document_combined)
         return "\n".join(context_parts)
 
@@ -830,6 +880,7 @@ class CourseQuerySystem:
             teacher = metadata.get('teacher', '')
             required = metadata.get('required', '')
             grade = metadata.get('grade', '')
+            mapping_json = metadata.get('grade_required_mapping', '')
             if not schedule and document:
                 import re
                 m = re.search(r'上課時間：([^\n]+)', document)
@@ -845,7 +896,8 @@ class CourseQuerySystem:
                     'teachers': set(),
                     'required': required,
                     'grade': grade,
-                    'documents': []
+                    'documents': [],
+                    'grade_required_mapping': mapping_json
                 }
             if serial:
                 grouped[key]['serials'].append(serial)
@@ -856,6 +908,8 @@ class CourseQuerySystem:
                 grouped[key]['required'] = required
             if grade and not grouped[key]['grade']:
                 grouped[key]['grade'] = grade
+            if mapping_json and not grouped[key]['grade_required_mapping']:
+                grouped[key]['grade_required_mapping'] = mapping_json
         return list(grouped.values())
 
 
