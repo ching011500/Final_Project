@@ -233,7 +233,7 @@ class CourseQuerySystem:
             else:
                 search_n_results = n_results * 15
         elif target_dept:
-            search_n_results = n_results * 15  # 系所查詢範圍放大，確保能包含必修與選修
+            search_n_results = n_results * 20  # 系所查詢範圍大幅放大，確保能包含必修、選修及院級課程
         elif need_required_filter:
             search_n_results = n_results * 12
         else:
@@ -349,6 +349,17 @@ class CourseQuerySystem:
                     grade_text = metadata.get('grade', '')
                     dept_text = metadata.get('dept', '')
                     
+                    # 定義學院映射關係（解決微積分、物理等院級課程匹配問題）
+                    college_mappings = {
+                        '通訊系': ['電機資訊學院', '電資院'],
+                        '資工系': ['電機資訊學院', '電資院'],
+                        '電機系': ['電機資訊學院', '電資院'],
+                        '經濟系': ['社會科學學院', '社科院'],
+                        '社工系': ['社會科學學院', '社科院'],
+                        '社會系': ['社會科學學院', '社科院'],
+                        '法律系': ['法律學院', '法學院'],
+                    }
+                    
                     # 1. 檢查年級欄位
                     grade_match = grade_has_target_dept(grade_text, target_dept) if grade_text else False
                     
@@ -374,10 +385,16 @@ class CourseQuerySystem:
                         if '法律' in target_dept:
                             keywords = ['法律', '法學', '司法', '財經法']
                             
+                        # 加入學院關鍵字檢查（針對院級必修）
+                        college_keywords = college_mappings.get(target_dept, [])
+                        
                         dept_match = any(kw in dept_text for kw in keywords)
+                        
+                        # 檢查年級欄位是否包含學院名稱（例如「電資院1」）
+                        college_grade_match = any(kw in grade_text for kw in college_keywords) if grade_text else False
                     
                     # 只要符合其中一個條件即可
-                    dept_matches = grade_match or dept_match
+                    dept_matches = grade_match or dept_match or college_grade_match
                 
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
@@ -511,7 +528,7 @@ class CourseQuerySystem:
             
             # 如果過濾後有結果，優先使用過濾後的結果（取多一點以便合併）
             if filtered_courses:
-                relevant_courses = filtered_courses[:n_results * 2]
+                relevant_courses = filtered_courses[:n_results * 10]  # 大幅增加保留數量，避免因必修課分班多而擠掉選修課
             else:
                 # 放寬策略：保留系所與時間條件，放寬必選修/年級過濾，避免空結果
                 # 但系所條件仍以年級欄位為準
@@ -533,7 +550,7 @@ class CourseQuerySystem:
                         relaxed.append(course)
                 
                 if relaxed:
-                    relevant_courses = relaxed[:n_results * 2]
+                    relevant_courses = relaxed[:n_results * 10]
                 else:
                     return f"很抱歉，沒有找到符合「{target_dept if target_dept else user_question}」的課程。請嘗試調整查詢條件。"
         else:
@@ -546,7 +563,7 @@ class CourseQuerySystem:
                     if schedule and check_time_match(schedule, time_condition):
                         time_filtered.append(course)
                 if time_filtered:
-                    relevant_courses = time_filtered[:n_results * 2]
+                    relevant_courses = time_filtered[:n_results * 10]
                 else:
                     return f"很抱歉，沒有找到符合時間條件的課程。請嘗試調整查詢條件。"
         
@@ -626,14 +643,27 @@ class CourseQuerySystem:
             # 進一步依系所過濾：只依賴年級欄位
             if target_dept:
                 filtered = []
+                # 定義學院映射關係（確保在確定性模式下也能匹配院級課程）
+                college_mappings = {
+                    '通訊系': ['電機資訊學院', '電資院'],
+                    '資工系': ['電機資訊學院', '電資院'],
+                    '電機系': ['電機資訊學院', '電資院'],
+                    '經濟系': ['社會科學學院', '社科院'],
+                    '社工系': ['社會科學學院', '社科院'],
+                    '社會系': ['社會科學學院', '社科院'],
+                    '法律系': ['法律學院', '法學院'],
+                }
+                college_keywords = college_mappings.get(target_dept, [])
+                
                 for c in relevant_courses:
                     md = (c.get('metadata', {}) or {})
                     grade_text = md.get('grade', '')
                     dept_text = md.get('dept', '')
                     grade_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
                     dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
+                    college_ok = any(kw in grade_text for kw in college_keywords) if grade_text else False
                     
-                    if grade_ok or dept_ok:
+                    if grade_ok or dept_ok or college_ok:
                         filtered.append(c)
                 if filtered:
                     relevant_courses = filtered
