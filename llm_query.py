@@ -486,11 +486,13 @@ class CourseQuerySystem:
                     
                     # 如果有 target_grade 但無法確定 grade_required (例如法律系分組導致匹配失敗)，嘗試退回使用 meta_required
                     if is_required is False and target_grade and grade_required is None:
-                        meta_required = metadata.get('required', '')
-                        if target_required == '必' and '必' in meta_required:
-                            is_required = True
-                        elif target_required == '選' and '選' in meta_required:
-                            is_required = True
+                        # 修正：只針對法律系等特殊系所啟用此 fallback，避免一般系所的大一必修課誤入大三查詢
+                        if '法律' in target_grade or '法學' in target_grade or '司法' in target_grade or '財法' in target_grade:
+                            meta_required = metadata.get('required', '')
+                            if target_required == '必' and '必' in meta_required:
+                                is_required = True
+                            elif target_required == '選' and '選' in meta_required:
+                                is_required = True
                             
                     elif need_required_filter and not target_grade:
                         # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
