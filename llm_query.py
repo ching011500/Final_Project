@@ -531,6 +531,10 @@ class CourseQuerySystem:
             if filtered_courses:
                 relevant_courses = filtered_courses[:n_results * 10]  # 大幅增加保留數量，避免因必修課分班多而擠掉選修課
             else:
+                # 如果使用者指定了年級，絕對不能放寬年級過濾，否則會顯示錯誤年級的課程
+                if target_grade:
+                    return f"很抱歉，沒有找到符合「{target_dept if target_dept else user_question}」在該年級的課程。請確認年級是否正確。"
+
                 # 放寬策略：保留系所與時間條件，放寬必選修/年級過濾，避免空結果
                 # 但系所條件仍以年級欄位為準
                 relaxed = []

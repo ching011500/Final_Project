@@ -109,9 +109,18 @@ def check_grade_required(course: Dict, target_grade: str) -> Optional[str]:
         g_text = re.sub(r'\d+', '', g_norm).strip()
         t_text = re.sub(r'\d+', '', t_norm).strip()
         
-        # 數字匹配邏輯優化：允許目標年級包含在課程年級列表中（例如「3」在「3,4」中）
-        # 若課程無數字（g_nums為空），視為不分年級，允許匹配
-        num_match = (not g_nums) or (t_num and t_num in g_nums)
+        # 數字匹配邏輯優化
+        # 修正：對於必修課，若目標指定了年級，則課程必須也有年級且匹配
+        # 這是為了避免「通訊系」（無年級）的必修課（通常是大一）被「通訊系3」匹配到
+        num_match = False
+        if t_num and not g_nums:
+            # 目標有年級，課程無年級：如果是必修，嚴格不匹配；選修則允許
+            if '必' in required_item:
+                num_match = False
+            else:
+                num_match = True
+        else:
+            num_match = (not g_nums) or (t_num and t_num in g_nums)
         
         if num_match:
             if g_text and t_text and (g_text in t_text or t_text in g_text):
@@ -124,6 +133,11 @@ def check_grade_required(course: Dict, target_grade: str) -> Optional[str]:
         if target_grade.startswith(grade_item):
             # 檢查差異部分
             diff = target_grade[len(grade_item):].strip()
+            
+            # 修正：如果是必修，且差異包含數字（代表指定了年級），則不匹配
+            if '必' in required_item and any(c.isdigit() for c in diff):
+                continue
+                
             # 如果差異合理（數字、字母等），可以匹配
             if '必' in required_item:
                 return '必'
@@ -223,15 +237,34 @@ def extract_grade_from_query(query: str) -> Optional[str]:
         r'(\S+系\s*碩\s*\d+)',            # 資工系碩1、經濟系碩2 等
         r'(\S+系)\s*[一1]年級',           # 經濟系一年級、資工系1年級
         r'(\S+系)\s*[一1]',               # 經濟系一、資工系1
+        r'(\S+系)\s*[一二三四1234]年級',  # 經濟系一年級、資工系1年級
+        r'(\S+系)\s*[一二三四1234]',      # 經濟系一、資工系1
         r'(\S+系)\s*碩\s*[一二12]',       # 資工系碩一、經濟系碩二
         r'(\S+系\s*\d+年級)',            # 經濟系1年級（去除「年級」）
         r'(\S+系\s*\d+)',                # 經濟系1
         r'(\S+碩\s*\d+)',                # 資工碩1、經濟碩2
+        
+        # 新增：系所簡稱+數字（如「通訊三」、「資工3」）
+        r'([^\d\s]+?)\s*([一二三四1234])',
     ]
     
     for pattern in patterns:
         match = re.search(pattern, query)
         if match:
+            # 處理雙群組匹配（系所簡稱+數字）
+            if len(match.groups()) == 2:
+                dept = match.group(1).strip()
+                num_str = match.group(2).strip()
+                
+                # 排除時間關鍵詞與其他非系所詞彙
+                if any(k in dept for k in ['週', '周', '星期', '禮拜', '第', '大', '碩', '年']):
+                    continue
+                
+                num = chinese_numbers.get(num_str, num_str)
+                if '系' not in dept:
+                    dept += '系'
+                return f"{dept}{num}"
+
             grade = match.group(1).strip()
             
             # 處理「一年級」格式
@@ -262,10 +295,15 @@ def extract_grade_from_query(query: str) -> Optional[str]:
             
             # 處理「一」格式（排除碩士班）
             if '一' in query and '一年級' not in query and '大一' not in query and '碩一' not in query:
+            # 處理「一二三四」格式（排除碩士班與年級字樣）
+            # 這裡處理如「通訊系三」的情況
+            num_match = re.search(r'[一二三四1234]', query)
+            if num_match and '年級' not in query and '大' not in query and '碩' not in query:
                 dept_match = re.search(r'(\S+系)', grade)
                 if dept_match:
                     dept = dept_match.group(1)
-                    return f"{dept}1"
+                    num = chinese_numbers.get(num_match.group(0), num_match.group(0))
+                    return f"{dept}{num}"
             
             # 移除「年級」字樣
             grade = grade.replace('年級', '').strip()
@@ -450,6 +488,11 @@ def check_grade_required_from_json(course: Dict, target_grade: str) -> Optional[
                 g_norm = grade_item.replace('學系', '').replace('系', '')
                 t_norm = target_grade.replace('學系', '').replace('系', '')
                 
+                # 處理中文數字
+                trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
+                g_norm = g_norm.translate(trans_table)
+                t_norm = t_norm.translate(trans_table)
+                
                 g_nums = re.findall(r'\d+', g_norm)
                 t_nums = re.findall(r'\d+', t_norm)
                 t_num = t_nums[0] if t_nums else ''
@@ -457,8 +500,17 @@ def check_grade_required_from_json(course: Dict, target_grade: str) -> Optional[
                 g_text = re.sub(r'\d+', '', g_norm).strip()
                 t_text = re.sub(r'\d+', '', t_norm).strip()
                 
-                # 數字匹配：目標年級在列表內，或課程不分年級
-                if (not g_nums) or (t_num and t_num in g_nums):
+                # 數字匹配邏輯修正
+                num_match = False
+                if t_num and not g_nums:
+                    if '必' in required_item:
+                        num_match = False
+                    else:
+                        num_match = True
+                else:
+                    num_match = (not g_nums) or (t_num and t_num in g_nums)
+                
+                if num_match:
                     if g_text and t_text and (g_text in t_text or t_text in g_text):
                         if '必' in required_item:
                             return '必'
@@ -662,6 +714,11 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
                 g_norm = grade_item.replace('學系', '').replace('系', '')
                 t_norm = target_grade.replace('學系', '').replace('系', '')
                 
+                # 處理中文數字
+                trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
+                g_norm = g_norm.translate(trans_table)
+                t_norm = t_norm.translate(trans_table)
+                
                 g_nums = re.findall(r'\d+', g_norm)
                 t_nums = re.findall(r'\d+', t_norm)
                 t_num = t_nums[0] if t_nums else ''
@@ -671,6 +728,17 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
                 
                 # 數字匹配：目標年級在列表內，或課程不分年級
                 if (not g_nums) or (t_num and t_num in g_nums):
+                # 數字匹配邏輯修正
+                num_match = False
+                if t_num and not g_nums:
+                    if '必' in required_item:
+                        num_match = False
+                    else:
+                        num_match = True
+                else:
+                    num_match = (not g_nums) or (t_num and t_num in g_nums)
+                
+                if num_match:
                     if g_text and t_text and (g_text in t_text or t_text in g_text):
                         if not any(g == grade_item for g, _ in results):
                             required_status = '必' if '必' in required_item else '選' if '選' in required_item else required_item
