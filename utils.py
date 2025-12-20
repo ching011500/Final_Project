@@ -294,7 +294,6 @@ def extract_grade_from_query(query: str) -> Optional[str]:
                         return f"{dept}碩3"
             
             # 處理「一」格式（排除碩士班）
-            if '一' in query and '一年級' not in query and '大一' not in query and '碩一' not in query:
             # 處理「一二三四」格式（排除碩士班與年級字樣）
             # 這裡處理如「通訊系三」的情況
             num_match = re.search(r'[一二三四1234]', query)
@@ -727,7 +726,6 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
                 t_text = re.sub(r'\d+', '', t_norm).strip()
                 
                 # 數字匹配：目標年級在列表內，或課程不分年級
-                if (not g_nums) or (t_num and t_num in g_nums):
                 # 數字匹配邏輯修正
                 num_match = False
                 if t_num and not g_nums:
