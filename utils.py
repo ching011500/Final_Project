@@ -96,6 +96,11 @@ def check_grade_required(course: Dict, target_grade: str) -> Optional[str]:
         g_norm = grade_item.replace('學系', '').replace('系', '')
         t_norm = target_grade.replace('學系', '').replace('系', '')
         
+        # 處理中文數字（避免「一」無法被識別導致誤判為不分年級）
+        trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
+        g_norm = g_norm.translate(trans_table)
+        t_norm = t_norm.translate(trans_table)
+        
         # 分離數字與文字進行比對（解決「通訊3」無法匹配「通訊工程3」的問題）
         g_nums = re.findall(r'\d+', g_norm)
         t_nums = re.findall(r'\d+', t_norm)
@@ -216,17 +221,34 @@ def extract_grade_from_query(query: str) -> Optional[str]:
     patterns = [
         r'(\S+系\s*\d+[A-Z]?)',           # 經濟系1A、資工系2 等（優先）
         r'(\S+系\s*碩\s*\d+)',            # 資工系碩1、經濟系碩2 等
-        r'(\S+系)\s*[一1]年級',           # 經濟系一年級、資工系1年級
-        r'(\S+系)\s*[一1]',               # 經濟系一、資工系1
+        r'(\S+系)\s*[一二三四1234]年級',  # 經濟系一年級、資工系1年級
+        r'(\S+系)\s*[一二三四1234]',      # 經濟系一、資工系1
         r'(\S+系)\s*碩\s*[一二12]',       # 資工系碩一、經濟系碩二
         r'(\S+系\s*\d+年級)',            # 經濟系1年級（去除「年級」）
         r'(\S+系\s*\d+)',                # 經濟系1
         r'(\S+碩\s*\d+)',                # 資工碩1、經濟碩2
+        
+        # 新增：系所簡稱+數字（如「通訊三」、「資工3」）
+        r'([^\d\s]+?)\s*([一二三四1234])',
     ]
     
     for pattern in patterns:
         match = re.search(pattern, query)
         if match:
+            # 處理雙群組匹配（系所簡稱+數字）
+            if len(match.groups()) == 2:
+                dept = match.group(1).strip()
+                num_str = match.group(2).strip()
+                
+                # 排除時間關鍵詞與其他非系所詞彙
+                if any(k in dept for k in ['週', '周', '星期', '禮拜', '第', '大', '碩', '年']):
+                    continue
+                
+                num = chinese_numbers.get(num_str, num_str)
+                if '系' not in dept:
+                    dept += '系'
+                return f"{dept}{num}"
+
             grade = match.group(1).strip()
             
             # 處理「一年級」格式
@@ -255,12 +277,15 @@ def extract_grade_from_query(query: str) -> Optional[str]:
                     elif '碩三' in query or '碩3' in query:
                         return f"{dept}碩3"
             
-            # 處理「一」格式（排除碩士班）
-            if '一' in query and '一年級' not in query and '大一' not in query and '碩一' not in query:
+            # 處理「一二三四」格式（排除碩士班與年級字樣）
+            # 這裡處理如「通訊系三」的情況
+            num_match = re.search(r'[一二三四1234]', query)
+            if num_match and '年級' not in query and '大' not in query and '碩' not in query:
                 dept_match = re.search(r'(\S+系)', grade)
                 if dept_match:
                     dept = dept_match.group(1)
-                    return f"{dept}1"
+                    num = chinese_numbers.get(num_match.group(0), num_match.group(0))
+                    return f"{dept}{num}"
             
             # 移除「年級」字樣
             grade = grade.replace('年級', '').strip()
@@ -444,6 +469,11 @@ def check_grade_required_from_json(course: Dict, target_grade: str) -> Optional[
             for grade_item, required_item in mapping:
                 g_norm = grade_item.replace('學系', '').replace('系', '')
                 t_norm = target_grade.replace('學系', '').replace('系', '')
+                
+                # 處理中文數字
+                trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
+                g_norm = g_norm.translate(trans_table)
+                t_norm = t_norm.translate(trans_table)
                 
                 g_nums = re.findall(r'\d+', g_norm)
                 t_nums = re.findall(r'\d+', t_norm)
@@ -656,6 +686,11 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
             for grade_item, required_item in mapping:
                 g_norm = grade_item.replace('學系', '').replace('系', '')
                 t_norm = target_grade.replace('學系', '').replace('系', '')
+                
+                # 處理中文數字
+                trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
+                g_norm = g_norm.translate(trans_table)
+                t_norm = t_norm.translate(trans_table)
                 
                 g_nums = re.findall(r'\d+', g_norm)
                 t_nums = re.findall(r'\d+', t_norm)
