@@ -688,7 +688,8 @@ class CourseQuerySystem:
                 if g['serials']:
                     lines.append(f"課程代碼：{', '.join(g['serials'])}")
                 if g['teachers']:
-                    lines.append(f"授課教師：{' & '.join(sorted(g['teachers']))}")
+                    teachers_list = [t if t else '無' for t in g['teachers']]
+                    lines.append(f"授課教師：{'、'.join(teachers_list)}")
                 if g['required']:
                     lines.append(f"必選修：{g['required']}")
                 if g['schedule']:
@@ -934,7 +935,8 @@ class CourseQuerySystem:
             if info['serials']:
                 context_parts.append(f"課程代碼：{', '.join(info['serials'])}")
             if info['teachers']:
-                context_parts.append(f"授課教師：{' & '.join(sorted(info['teachers']))}")
+                teachers_list = [t if t else '無' for t in info['teachers']]
+                context_parts.append(f"授課教師：{'、'.join(teachers_list)}")
             if info['dept']:
                 context_parts.append(f"系所：{info['dept']}")
             if info['required']:
@@ -1059,17 +1061,19 @@ class CourseQuerySystem:
                     'name': name,
                     'schedule': schedule,
                     'dept': dept,
-                    'serials': [],
-                    'teachers': set(),
+                    'course_items': [],
                     'required': required,
                     'grade': grade,
                     'documents': [],
                     'grade_required_mapping': mapping_json
                 }
-            if serial:
-                grouped[key]['serials'].append(serial)
-            if teacher:
-                grouped[key]['teachers'].add(teacher)
+            
+            # 儲存課程代碼與教師的對應關係
+            grouped[key]['course_items'].append({
+                'serial': serial,
+                'teacher': teacher
+            })
+            
             grouped[key]['documents'].append(document)
             if required and not grouped[key]['required']:
                 grouped[key]['required'] = required
@@ -1077,7 +1081,20 @@ class CourseQuerySystem:
                 grouped[key]['grade'] = grade
             if mapping_json and not grouped[key]['grade_required_mapping']:
                 grouped[key]['grade_required_mapping'] = mapping_json
-        return list(grouped.values())
+        
+        # 後處理：依課程代碼排序並提取列表
+        results = []
+        for info in grouped.values():
+            # 依課程代碼排序，確保教師順序與代碼對應
+            info['course_items'].sort(key=lambda x: x['serial'])
+            
+            info['serials'] = [x['serial'] for x in info['course_items'] if x['serial']]
+            # 提取對應的教師列表 (若資料庫中多位教師以逗號分隔，替換為 & 以符合 Prompt 要求)
+            info['teachers'] = [x['teacher'].replace(',', '&') if x['teacher'] else '' for x in info['course_items']]
+            
+            results.append(info)
+            
+        return results
 
 
 if __name__ == "__main__":
