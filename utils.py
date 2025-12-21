@@ -296,8 +296,6 @@ def extract_grade_from_query(query: str) -> Optional[str]:
                     elif '碩三' in query or '碩3' in query:
                         return f"{dept}碩3"
             
-            # 處理「一」格式（排除碩士班）
-            if '一' in query and '一年級' not in query and '大一' not in query and '碩一' not in query:
             # 處理「一二三四」格式（排除碩士班與年級字樣）
             # 這裡處理如「通訊系三」的情況
             num_match = re.search(r'[一二三四1234]', query)
@@ -305,7 +303,6 @@ def extract_grade_from_query(query: str) -> Optional[str]:
                 dept_match = re.search(r'(\S+系)', grade)
                 if dept_match:
                     dept = dept_match.group(1)
-                    return f"{dept}1"
                     num = chinese_numbers.get(num_match.group(0), num_match.group(0))
                     return f"{dept}{num}"
             
@@ -704,8 +701,6 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
                 # 標準匹配：grade_item 以 target_grade 開頭
                 if grade_item.startswith(target_grade):
                     diff = grade_item[len(target_grade):].strip()
-                    # 如果差異是一個字母（A, B, C, D），這是有效的匹配
-                    if len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']:
                     # 允許：
                     # 1. 單個字母 (A, B...)
                     # 2. 非數字開頭的字串 (法學組, 智財組...) -> 避免 1 匹配 11

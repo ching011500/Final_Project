@@ -419,7 +419,9 @@ class CourseQuerySystem:
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
                 
-                if need_required_filter or target_grade:
+                # 只有在明確要求必選修過濾時才進行過濾
+                # 如果只指定年級但沒有必選修要求，則不過濾必選修
+                if need_required_filter:
                     # 需要進行過濾
                     is_required = False  # 預設為 False，需要明確匹配才通過
                     
@@ -514,23 +516,63 @@ class CourseQuerySystem:
                             is_required = True
                             
                     elif need_required_filter and not target_grade:
-                        # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
-                        meta_required = metadata.get('required', '')
-                        if target_required == '必' and meta_required and '必' in meta_required:
-                            is_required = True
-                        elif target_required == '選' and meta_required and '選' in meta_required:
-                            is_required = True
-                        elif '必選修：' in document:
-                            required_match = re.search(r'必選修：([^\n]+)', document)
-                            if required_match:
-                                required_text = required_match.group(1).strip()
-                                if target_required == '必':
-                                    is_required = '必' in required_text
-                                elif target_required == '選':
-                                    is_required = '選' in required_text
-                        # 注意：如果已經有 target_grade，不應該使用這個傳統方式檢查
-                        # 因為這個方式無法檢查特定年級的必選修狀態
-                        # 只有在沒有 target_grade 的情況下才使用
+                        # 沒有 target_grade，但有必選修要求
+                        # 優先使用 grade_required_mapping 檢查該系所是否有符合的必選修狀態
+                        if mapping_json:
+                            try:
+                                mapping_data = json.loads(mapping_json)
+                                mapping = mapping_data.get('mapping', [])
+                                
+                                # 檢查是否有任何一個 grade 包含目標系所，且 required 符合要求
+                                found_match = False
+                                for g_item, r_item in mapping:
+                                    # 檢查 grade 是否包含目標系所
+                                    if target_dept:
+                                        # 使用 grade_has_target_dept 函數檢查
+                                        if grade_has_target_dept(g_item, target_dept):
+                                            req_status = '必' if '必' in r_item else '選' if '選' in r_item else None
+                                            if req_status == target_required:
+                                                found_match = True
+                                                break
+                                    else:
+                                        # 沒有指定系所，直接檢查 required
+                                        req_status = '必' if '必' in r_item else '選' if '選' in r_item else None
+                                        if req_status == target_required:
+                                            found_match = True
+                                            break
+                                
+                                if found_match:
+                                    is_required = True
+                                else:
+                                    is_required = False
+                            except:
+                                # 如果 JSON 解析失敗，退回使用傳統方式
+                                meta_required = metadata.get('required', '')
+                                if target_required == '必' and meta_required and '必' in meta_required:
+                                    is_required = True
+                                elif target_required == '選' and meta_required and '選' in meta_required:
+                                    is_required = True
+                                else:
+                                    is_required = False
+                        else:
+                            # 沒有 grade_required_mapping，使用傳統方式檢查
+                            meta_required = metadata.get('required', '')
+                            if target_required == '必' and meta_required and '必' in meta_required:
+                                is_required = True
+                            elif target_required == '選' and meta_required and '選' in meta_required:
+                                is_required = True
+                            elif '必選修：' in document:
+                                required_match = re.search(r'必選修：([^\n]+)', document)
+                                if required_match:
+                                    required_text = required_match.group(1).strip()
+                                    if target_required == '必':
+                                        is_required = '必' in required_text
+                                    elif target_required == '選':
+                                        is_required = '選' in required_text
+                                else:
+                                    is_required = False
+                            else:
+                                is_required = False
                 
                 # 檢查時間條件
                 time_matches = True
