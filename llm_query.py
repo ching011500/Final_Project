@@ -416,6 +416,105 @@ class CourseQuerySystem:
                     else:
                         dept_matches = college_grade_match
                 
+                # 當有指定年級時，需要嚴格檢查 grade 欄位是否包含目標年級
+                # 例如：當 target_grade 為「統計系3」時，grade_text 必須包含「統計系3」
+                # 不能只包含系所或只包含年級數字
+                grade_matches = True
+                if target_grade:
+                    grade_text = metadata.get('grade', '')
+                    if not grade_text:
+                        # 如果沒有 grade_text，嘗試從 document 中提取
+                        grade_match = re.search(r'年級：([^\n]+)', document)
+                        if grade_match:
+                            grade_text = grade_match.group(1).strip()
+                    
+                    if grade_text:
+                        # 使用 check_grade_required 的邏輯來檢查 grade 匹配
+                        # 但這裡我們只需要檢查是否有匹配，不需要檢查必選修狀態
+                        # 先嘗試使用 grade_required_mapping
+                        mapping_json = metadata.get('grade_required_mapping', '')
+                        found_grade_match = False
+                        
+                        if mapping_json:
+                            try:
+                                mapping_data = json.loads(mapping_json)
+                                mapping = mapping_data.get('mapping', [])
+                                
+                                # 檢查 mapping 中是否有任何 grade_item 匹配 target_grade
+                                for grade_item, _ in mapping:
+                                    # 使用類似 check_grade_required 的匹配邏輯
+                                    if grade_item == target_grade:
+                                        found_grade_match = True
+                                        break
+                                    elif grade_item.startswith(target_grade):
+                                        diff = grade_item[len(target_grade):].strip()
+                                        if len(diff) == 0 or \
+                                           (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
+                                           (len(diff) > 0 and not diff[0].isdigit()):
+                                            found_grade_match = True
+                                            break
+                                    elif target_grade.startswith(grade_item):
+                                        diff = target_grade[len(grade_item):].strip()
+                                        if len(diff) == 0 or \
+                                           (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']):
+                                            found_grade_match = True
+                                            break
+                            except:
+                                pass
+                        
+                        # 如果 grade_required_mapping 沒有匹配，使用傳統方式檢查
+                        if not found_grade_match:
+                            required = metadata.get('required', '')
+                            if not required:
+                                required_match = re.search(r'必選修：([^\n]+)', document)
+                                if required_match:
+                                    required = required_match.group(1).strip()
+                            
+                            if grade_text and required:
+                                course_dict = {'grade': grade_text, 'required': required}
+                                # 使用 check_grade_required 檢查，如果返回非 None，表示有匹配
+                                grade_required_status = check_grade_required(course_dict, target_grade)
+                                if grade_required_status is not None:
+                                    found_grade_match = True
+                        
+                        # 如果還是沒有匹配，檢查 grade_text 中是否直接包含 target_grade
+                        if not found_grade_match:
+                            # 將 grade_text 按分隔符分割，檢查每個 token
+                            tokens = re.split(r'[\\|,，/\\s]+', grade_text)
+                            for tk in tokens:
+                                if not tk:
+                                    continue
+                                # 精確匹配
+                                if tk == target_grade:
+                                    found_grade_match = True
+                                    break
+                                # 部分匹配：tk 以 target_grade 開頭，且差異是字母（A, B, C, D）
+                                elif tk.startswith(target_grade):
+                                    diff = tk[len(target_grade):].strip()
+                                    if len(diff) == 0 or \
+                                       (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']):
+                                        found_grade_match = True
+                                        break
+                                # 反向匹配：target_grade 以 tk 開頭，且差異是字母或數字
+                                elif target_grade.startswith(tk):
+                                    diff = target_grade[len(tk):].strip()
+                                    # 檢查 tk 是否包含系所和年級
+                                    if any(c.isdigit() for c in tk) and any(c.isdigit() for c in target_grade):
+                                        # 提取數字進行比較
+                                        tk_nums = re.findall(r'\d+', tk)
+                                        tg_nums = re.findall(r'\d+', target_grade)
+                                        if tk_nums and tg_nums and tk_nums[0] == tg_nums[0]:
+                                            found_grade_match = True
+                                            break
+                        
+                        grade_matches = found_grade_match
+                    else:
+                        # 如果沒有 grade_text，且指定了 target_grade，則不匹配
+                        grade_matches = False
+                else:
+                    # 沒有指定 target_grade，不需要檢查 grade 匹配
+                    grade_matches = True
+                
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
                 
@@ -585,7 +684,8 @@ class CourseQuerySystem:
                         time_matches = False
                 
                 # 同時滿足所有條件
-                if dept_matches and is_required and time_matches:
+                # 當有指定年級時，必須同時滿足 grade_matches（年級匹配）
+                if dept_matches and grade_matches and is_required and time_matches:
                     filtered_courses.append(course)
             
             # 如果過濾後有結果，優先使用過濾後的結果（取多一點以便合併）
