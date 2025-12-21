@@ -908,11 +908,17 @@ class CourseQuerySystem:
                 def process_batch_for_grade_required(docs, metas):
                     nonlocal relevant_courses, seen_ids
                     found_count = 0
+                    checked_count = 0
                     for doc, md in zip(docs, metas):
+                        checked_count += 1
                         # 檢查年級匹配
                         grade_text = md.get('grade', '')
                         if not grade_text:
                             continue
+                        
+                        # 調試：每檢查100個課程打印一次進度
+                        if checked_count % 100 == 0:
+                            print(f"  ⏳ 已檢查 {checked_count} 個課程，找到 {found_count} 個符合條件的課程...")
                         
                         # 使用 grade_has_target_dept 檢查系所
                         if target_dept:
@@ -1017,7 +1023,10 @@ class CourseQuerySystem:
                         # 繼續掃描，不限制數量，確保找到所有符合條件的課程
                         # 但為了避免過度掃描，可以設定一個合理的上限
                         if len(relevant_courses) >= n_results * 5:
+                            print(f"  ⚠️ 達到掃描上限 ({n_results * 5})，停止掃描")
                             return True
+                    if found_count > 0:
+                        print(f"  📊 本批次找到 {found_count} 個符合條件的課程")
                     return False
 
                 # 分批取出
@@ -1030,7 +1039,9 @@ class CourseQuerySystem:
                     docs = all_results.get('documents', [])
                     metas = all_results.get('metadatas', [])
                     if docs and metas:
+                        print(f"  📦 處理批次 {offset // batch_size + 1}，包含 {len(docs)} 個課程")
                         if process_batch_for_grade_required(docs, metas):
+                            print(f"  ⚠️ 達到掃描上限，停止掃描")
                             break
             except Exception as e:
                 # 如果補強失敗，打印錯誤信息以便調試
