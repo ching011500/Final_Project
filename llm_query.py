@@ -1417,14 +1417,33 @@ class CourseQuerySystem:
 - 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！
 - **極其重要**：你必須列出「相關課程資料」中**所有**符合條件的課程，絕對不能遺漏任何一筆！如果資料中有 4 筆課程，你必須顯示 4 筆；如果有 5 筆，你必須顯示 5 筆。不要因為任何原因（如格式、長度等）而省略任何課程！"""
         
+        # 提取所有課程名稱，用於在 prompt 中明確列出
+        course_names_list = []
+        for c in relevant_courses:
+            md = c.get('metadata', {})
+            name = md.get('name', '')
+            if name:
+                # 只取中文名稱部分
+                chinese_name = name.split(' / ')[0] if ' / ' in name else name
+                course_names_list.append(chinese_name)
+        
+        course_names_str = '、'.join(course_names_list) if course_names_list else '無'
+        
         user_prompt = f"""使用者問題：{user_question}
 
 以下是相關課程資料（已過濾出符合條件的課程，共 {len(relevant_courses)} 筆）：
 {context}
 
-**重要**：以上資料中共有 {len(relevant_courses)} 筆符合條件的課程，你必須**全部**列出，不能遺漏任何一筆！請仔細檢查每一筆課程資料，確保全部顯示。
+**極其重要**：以上資料中共有 {len(relevant_courses)} 筆符合條件的課程，課程名稱分別為：{course_names_str}。
 
-請仔細閱讀以上課程資料，並根據實際資料回答使用者的問題。
+你必須**全部**列出這 {len(relevant_courses)} 筆課程，絕對不能遺漏任何一筆！請按照以下順序逐一檢查並顯示：
+1. {course_names_list[0] if len(course_names_list) > 0 else '無'}
+2. {course_names_list[1] if len(course_names_list) > 1 else '無'}
+3. {course_names_list[2] if len(course_names_list) > 2 else '無'}
+4. {course_names_list[3] if len(course_names_list) > 3 else '無'}
+5. {course_names_list[4] if len(course_names_list) > 4 else '無'}
+
+請仔細閱讀以上課程資料，並根據實際資料回答使用者的問題。**必須顯示所有 {len(relevant_courses)} 筆課程！**
 
 
 【與課程無關之提問】
@@ -1448,7 +1467,7 @@ class CourseQuerySystem:
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.1,  # 極低溫度以嚴格遵循格式要求
-                max_tokens=3500  # 增加 tokens 以包含更多課程資訊 (15筆課程需要更多空間)
+                max_tokens=4000  # 增加 tokens 以確保能顯示所有課程資訊
             )
             
             answer = response.choices[0].message.content
