@@ -5,15 +5,16 @@ import os
 from dotenv import load_dotenv
 from collections import deque
 import re
+
+# 載入環境變數
+load_dotenv()
+
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from rag_system import CourseRAGSystem
 from llm_query import CourseQuerySystem
-
-# 載入環境變數
-load_dotenv()
 
 app = Flask(__name__)
 
@@ -118,13 +119,13 @@ def handle_message(event):
             cleaned_message = re.sub(r'^(請幫我|麻煩你|麻煩|請|幫我|幫忙|幫忙查詢|幫忙找)\s*', '', cleaned_message)
             cleaned_message = re.sub(r'^(查詢|查找|找)\s*', '', cleaned_message)
             app.logger.info(f"查詢中：{user_message} -> 清理後：{cleaned_message}")
-            # 可以調整 n_results 來改變顯示的課程數量（設為 30 以顯示更多課程）
-            n_results = 30
+            # 可以調整 n_results 來改變顯示的課程數量（預設 10 個，合併後應該會有 5 門不同的課程）
+            n_results = 10
             reply_text = query_system.query(cleaned_message, n_results=n_results)
             
             # 如果回答太長，截斷並提示
-            if len(reply_text) > 4500:  # Line 訊息長度限制 (上限 5000)
-                reply_text = reply_text[:4400] + "\n\n...（回答過長，已截斷）"
+            if len(reply_text) > 2000:  # Line 訊息長度限制
+                reply_text = reply_text[:1900] + "\n\n...（回答過長，已截斷）"
             # 記錄回覆內容（避免過長只記錄前 300 字）
             app.logger.info(f"回覆內容（前300字）：{reply_text[:300]}")
 
@@ -163,3 +164,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     # 生產模式請關閉 debug，避免雙進程造成重複回覆
     app.run(host="0.0.0.0", port=port, debug=False)
+

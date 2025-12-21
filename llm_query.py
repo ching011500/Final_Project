@@ -487,20 +487,10 @@ class CourseQuerySystem:
                     # 如果有 target_grade 但無法確定 grade_required (例如法律系分組導致匹配失敗)，嘗試退回使用 meta_required
                     if is_required is False and target_grade and grade_required is None:
                         meta_required = metadata.get('required', '')
-                        
-                        # 修正：只針對法律系等特殊系所啟用此 fallback
-                        if '法律' in target_grade or '法學' in target_grade or '司法' in target_grade or '財法' in target_grade:
-                            if target_required == '必' and '必' in meta_required:
-                                is_required = True
-                            elif target_required == '選' and '選' in meta_required:
-                                is_required = True
-                        
-                        # 新增：針對選修課程的放寬策略
-                        elif '選' in meta_required and '必' not in meta_required:
-                            grade_val = metadata.get('grade', '')
-                            # 如果 grade 欄位沒有數字，視為全系選修
-                            if not any(c.isdigit() for c in grade_val):
-                                is_required = True
+                        if target_required == '必' and '必' in meta_required:
+                            is_required = True
+                        elif target_required == '選' and '選' in meta_required:
+                            is_required = True
                             
                     elif need_required_filter and not target_grade:
                         # 沒有 target_grade，但有必選修要求，使用 metadata 或 document 檢查
@@ -539,10 +529,6 @@ class CourseQuerySystem:
             if filtered_courses:
                 relevant_courses = filtered_courses[:n_results * 10]  # 大幅增加保留數量，避免因必修課分班多而擠掉選修課
             else:
-                # 如果使用者指定了年級，絕對不能放寬年級過濾，否則會顯示錯誤年級的課程
-                if target_grade:
-                    return f"很抱歉，沒有找到符合「{target_dept if target_dept else user_question}」在該年級的課程。請確認年級是否正確。"
-
                 # 放寬策略：保留系所與時間條件，放寬必選修/年級過濾，避免空結果
                 # 但系所條件仍以年級欄位為準
                 relaxed = []
@@ -702,8 +688,7 @@ class CourseQuerySystem:
                 if g['serials']:
                     lines.append(f"課程代碼：{', '.join(g['serials'])}")
                 if g['teachers']:
-                    teachers_list = [t if t else '無' for t in g['teachers']]
-                    lines.append(f"授課教師：{'、'.join(teachers_list)}")
+                    lines.append(f"授課教師：{' & '.join(sorted(g['teachers']))}")
                 if g['required']:
                     lines.append(f"必選修：{g['required']}")
                 if g['schedule']:
@@ -721,7 +706,6 @@ class CourseQuerySystem:
 1. 你必須完全根據提供的「相關課程資料」來回答，絕對不能編造、發明或猜測任何課程資訊
 2. 如果提供的資料中沒有某個資訊，就說「資料中未提供」，不要編造
 3. 只能使用「相關課程資料」中實際存在的課程，不能自己創造課程
-4. 剛在Line加入好友，發一則罐頭訊息:「我是北大課程查詢小幫手，歡迎查詢臺北大學114學年度上學期課程唷!!」
 
 【課程回答時的指導原則】
 1. 使用繁體中文回答，語氣自然、像跟同學聊天，簡短問候開頭也可以（不要太長）
@@ -764,7 +748,7 @@ class CourseQuerySystem:
         * 電機工程學系，多會簡稱電機(系)；通訊工程學系，多會簡稱通訊(系)；資訊工程學系，多會簡稱資工(系)
         * 公共行政暨政策學系，多會簡稱公行(系)或行政(系)
         * 社會工作學系，多會簡稱社工(系)
-        * 中國文學系，簡稱中文系；應用外語系，簡稱外語(系)、應外(系)、外文(系)
+        * 中國文學系，簡稱中文系；應用外語系，簡稱外語(系)、應外(系)
         * 師資培育，簡稱師培
      7) 若提問缺少系所，則代表不分系所顯示；若缺少組別，則不分組別顯示；若缺少年級，則不分年級顯示；若缺少必選修，則不分必選修顯示；若缺少時間，則不分時間顯示。
      8) 如果課程對不同組別有不同的必選修狀態，可加以說明。
@@ -788,15 +772,15 @@ class CourseQuerySystem:
    - 優先順序：先顯示課程名稱不同的課程。
    - 合併顯示規則（必須執行）：
         1) 如果多筆課程的「課程名稱相同」且「上課時間完全相同」，則必須合併為一筆顯示。
-        2) 合併時，在「授課教師」欄位必須顯示所有教師，並以「、」來串接，格式為：「教師A、教師B、教師C、教師D」，A、B、C、D教師各代表一門課。
-        3) 同一門課有兩個以上的授課老師，則以「&」來區隔，格式如「教師A&教師B、教師C&教師D」，代表AB同一門，CD為同一門。
-        4) 若非合併顯示規則，即該門課獨立，但教師若有兩人以上，則仍以「&」來區隔，如「教師A&教師B&教師C」
-        5) 合併時，課程代碼必須全部列出，並用逗號分隔（例如：U1017, U1166, U1011, U1012），並與授課老師對齊列順序。
+        2) 合併時，在「授課教師」欄位必須顯示所有教師，並以「 、 」來串接，格式為：「教師A 、 教師B 、 教師C 、 教師D 同時段皆有開課」，A、B、C、D教師各代表一門課。
+        3) 同一門課有兩個以上的授課老師，則以「|」來區隔，格式如「教師A|教師B 、 教師C|教師D 同時段皆有開課」，代表AB同一門，CD為同一門。
+        4) 若非合併顯示規則，在授課老師欄位無須寫「同時段皆有開課」，且教師若有兩人以上，則仍以「|」來區隔，如「教師A|教師B|教師C」
+        5) 合併時，課程代碼必須全部列出，並用逗號分隔（例如：U1017, U1166, U1011, U1012）。
         6) 絕對不要分開顯示相同課程名稱和相同上課時間的課程。 
         7)合併時的顯示方式：
             - 課程名稱：顯示一次即可
             - 課程代碼：列出所有課程代碼，用逗號分隔（例如：U1017, U1166, U1011, U1012）
-            - 授課教師：依前述規則，必須顯示為「教師A、教師B、教師C、教師D」或「師A&教師B、教師C&教師D」的格式，注意順序要對應課程代碼。   
+            - 授課教師：依前述規則，必須顯示為「教師A 、 教師B 、 教師C 、 教師D 同時段皆有開課」或「師A|教師B 、 教師C|教師D」的格式。   
             - 上課時間：顯示一次即可
             - 系所：顯示一次即可
             - 必選修類型：顯示一次即可
@@ -814,14 +798,14 @@ class CourseQuerySystem:
         * 上課時間、學分數、年級（必須是資料中實際的資訊）     
   
    - 顯示順序：
-        - 先顯示課程名稱不同的課程，按照課程代碼數字小到大排序
-        - 相同課程名稱的，按照課程代碼數字小到大排序
+        - 先顯示課程名稱不同的課程
+        - 相同課程名稱的，按照上課時間排序
    
    - 範例1：如果有4個「統計學」課程，都是「每週四2~4」，但教師不同（林定香、莊惠菁、朱是鍇、謝璦如），各自對應的課程代碼是（U1017, U1166, U1011, U1012），則必須合併顯示為：
        ```
        課程名稱：統計學 / Statistics
-       課程代碼：U1011, U1012, U1017, U1166
-       授課教師：、朱是鍇、謝璦如、林定香、莊惠菁
+       課程代碼：U1017, U1166, U1011, U1012
+       授課教師：林定香 、 莊惠菁 、 朱是鍇 、 謝璦如 同時段皆有開課
        系所：統計系
        必選修類型：必修
        上課時間：每週四2~4
@@ -829,33 +813,16 @@ class CourseQuerySystem:
        年級：統計系1
        ```
    
-   - 範例2：如果資料中有5筆「專題製作I」課程，時間僅顯示「每週為維護0」，教師分別是「王鵬華&沈瑞欽、江振宇&魏存毅、許裕彬&余帝穀、李文玄、白宏達&李忠益」，對應的課程代碼是「U3091, U3094, U3141, U3148, U3152」，則必須合併顯示為：
+   - 範例2：如果資料中有5筆「專題製作I」課程，時間僅顯示「每週為維護0」，教師分別是「許裕彬|余帝穀、王鵬華|沈瑞欽、江振宇|魏存毅、李文玄、白宏達|李忠益」，對應的課程代碼是「U3094, U3152, U3141, U3091, U3148」，則必須合併顯示為：
        ```
        課程名稱：專題製作I / Senior Projects I
-       課程代碼：U3091, U3094, U3141, U3148, U3152
-       授課教師：王鵬華&沈瑞欽、江振宇&魏存毅、許裕彬&余帝穀、李文玄、白宏達&李忠益
+       課程代碼：U3094, U3152, U3141, U3091, U3148
+       授課教師：許裕彬|余帝穀 、 王鵬華|沈瑞欽 、 江振宇|魏存毅 、 李文玄 、 白宏達|李忠益 同時段皆有開課
        系所：通訊系
        必選修類型：必修
        上課時間：每週
        學分數：2
        年級：通訊系3
-       ```
-       可以注意到王鵬華&沈瑞欽為同一門；江振宇&魏存毅為同一門；許裕彬&余帝穀為同一門；李文玄獨自一人一門；白宏達&李忠益為同一門。
-       再來，課程代碼順序也是按照課程代碼數字小到大排序，教師名稱也是依課程代碼去對應。
-
-       
-   
-   - 範例3：如果有1門「電子電路I」課程，是「每週二5~7」，教師為余帝穀，對應的課程代碼是（U2322），無其他同時段同名同系所課程，毋須合併顯示：
-      
-      
-       課程名稱：電子電路I / Electronic Circuits I
-       課程代碼：U2322
-       授課教師：余帝穀
-       系所：通訊系
-       必選修類型：必修
-       上課時間：每週二5~7
-       學分數：3
-       年級：通訊系2
        ```
    
    - 只有在「相關課程資料」中完全沒有任何符合條件的課程時，才告訴使用者沒有找到。
@@ -950,8 +917,7 @@ class CourseQuerySystem:
             if info['serials']:
                 context_parts.append(f"課程代碼：{', '.join(info['serials'])}")
             if info['teachers']:
-                teachers_list = [t if t else '無' for t in info['teachers']]
-                context_parts.append(f"授課教師：{'、'.join(teachers_list)}")
+                context_parts.append(f"授課教師：{' & '.join(sorted(info['teachers']))}")
             if info['dept']:
                 context_parts.append(f"系所：{info['dept']}")
             if info['required']:
@@ -1053,16 +1019,10 @@ class CourseQuerySystem:
             return d.strip() if d else ""
         def normalize_sched(s):
             return s.strip() if s else ""
-        # 新增：名稱正規化（處理全形冒號）
-        def normalize_name(n):
-            if not n: return ""
-            return n.replace('：', ':').strip()
-            
         grouped = {}
         for course in courses:
             metadata = course.get('metadata', {}) or {}
             document = course.get('document', '') or ''
-            name = normalize_name(metadata.get('name', '')) # 使用正規化後的名稱
             name = metadata.get('name', '')
             dept = normalize_dept(metadata.get('dept', ''))
             schedule = normalize_sched(metadata.get('schedule', ''))
@@ -1082,19 +1042,17 @@ class CourseQuerySystem:
                     'name': name,
                     'schedule': schedule,
                     'dept': dept,
-                    'course_items': [],
+                    'serials': [],
+                    'teachers': set(),
                     'required': required,
                     'grade': grade,
                     'documents': [],
                     'grade_required_mapping': mapping_json
                 }
-            
-            # 儲存課程代碼與教師的對應關係
-            grouped[key]['course_items'].append({
-                'serial': serial,
-                'teacher': teacher
-            })
-            
+            if serial:
+                grouped[key]['serials'].append(serial)
+            if teacher:
+                grouped[key]['teachers'].add(teacher)
             grouped[key]['documents'].append(document)
             if required and not grouped[key]['required']:
                 grouped[key]['required'] = required
@@ -1102,22 +1060,7 @@ class CourseQuerySystem:
                 grouped[key]['grade'] = grade
             if mapping_json and not grouped[key]['grade_required_mapping']:
                 grouped[key]['grade_required_mapping'] = mapping_json
-        
-        # 後處理：依課程代碼排序並提取列表
-        results = []
-        for info in grouped.values():
-            # 依課程代碼排序，確保教師順序與代碼對應
-            info['course_items'].sort(key=lambda x: x['serial'])
-            
-            info['serials'] = [x['serial'] for x in info['course_items'] if x['serial']]
-            # 提取對應的教師列表 (若資料庫中多位教師以逗號分隔，替換為 & 以符合 Prompt 要求)
-            # 同時處理 | 分隔符
-            info['teachers'] = [x['teacher'].replace(',', '&').replace('|', '&') if x['teacher'] else '' for x in info['course_items']]
-            info['teachers'] = [x['teacher'].replace(',', '&') if x['teacher'] else '' for x in info['course_items']]
-            
-            results.append(info)
-            
-        return results
+        return list(grouped.values())
 
 
 if __name__ == "__main__":

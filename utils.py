@@ -71,70 +71,19 @@ def check_grade_required(course: Dict, target_grade: str) -> Optional[str]:
         # 避免「1」匹配「1A」或「經濟系1」匹配「經濟系1A」
         
         # 情況1：target_grade 是 grade_item 的前綴，且差異只有一個字母（A, B, C, D）
-        # 例如：「經濟系1」匹配「經濟系1A」
+        # 例如：「經濟系1」 + "A" = 「經濟系1A」，這種情況不應該匹配
         if grade_item.startswith(target_grade):
             # 檢查差異部分
             diff = grade_item[len(target_grade):].strip()
-            
-            # 允許差異為空，或是字母（A, B...），或是非數字（組別等）
-            # 這樣可以讓「通訊系1」匹配「通訊系1A」，也可以讓「通訊系3」匹配「通訊系3A」
-            if len(diff) == 0 or \
-               (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
-               (len(diff) > 0 and not diff[0].isdigit()):
-                if '必' in required_item:
-                    return '必'
-                elif '選' in required_item:
-                    return '選'
+            # 如果差異只有一個字母（A, B, C, D），這是誤匹配，跳過
+            if len(diff) == 1 and diff in ['A', 'B', 'C', 'D']:
+                continue  # 跳過誤匹配
         
         # 情況2：grade_item 是 target_grade 的前綴
         # 例如：「經濟系1A」是「經濟系1A2」的前綴，這種情況可以匹配
-        # 情況2：系所名稱模糊匹配（處理「通訊系3」匹配「通訊工程學系3A」）
-        # 移除「系」、「學系」後比較
-        g_norm = grade_item.replace('學系', '').replace('系', '')
-        t_norm = target_grade.replace('學系', '').replace('系', '')
-        
-        # 處理中文數字（避免「一」無法被識別導致誤判為不分年級）
-        trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
-        g_norm = g_norm.translate(trans_table)
-        t_norm = t_norm.translate(trans_table)
-        
-        # 分離數字與文字進行比對（解決「通訊3」無法匹配「通訊工程3」的問題）
-        g_nums = re.findall(r'\d+', g_norm)
-        t_nums = re.findall(r'\d+', t_norm)
-        t_num = t_nums[0] if t_nums else ''
-        
-        g_text = re.sub(r'\d+', '', g_norm).strip()
-        t_text = re.sub(r'\d+', '', t_norm).strip()
-        
-        # 數字匹配邏輯優化
-        # 修正：對於必修課，若目標指定了年級，則課程必須也有年級且匹配
-        # 這是為了避免「通訊系」（無年級）的必修課（通常是大一）被「通訊系3」匹配到
-        num_match = False
-        if t_num and not g_nums:
-            # 目標有年級，課程無年級：如果是必修，嚴格不匹配；選修則允許
-            if '必' in required_item:
-                num_match = False
-            else:
-                num_match = True
-        else:
-            num_match = (not g_nums) or (t_num and t_num in g_nums)
-        
-        if num_match:
-            if g_text and t_text and (g_text in t_text or t_text in g_text):
-                if '必' in required_item:
-                    return '必'
-                elif '選' in required_item:
-                    return '選'
-
-        # 情況3：grade_item 是 target_grade 的前綴（反向匹配，例如「通訊系」匹配「通訊系3」）
         if target_grade.startswith(grade_item):
             # 檢查差異部分
             diff = target_grade[len(grade_item):].strip()
-            
-            # 修正：如果是必修，且差異包含數字（代表指定了年級），則不匹配
-            if '必' in required_item and any(c.isdigit() for c in diff):
-                continue
-                
             # 如果差異合理（數字、字母等），可以匹配
             if '必' in required_item:
                 return '必'
@@ -234,34 +183,15 @@ def extract_grade_from_query(query: str) -> Optional[str]:
         r'(\S+系\s*碩\s*\d+)',            # 資工系碩1、經濟系碩2 等
         r'(\S+系)\s*[一1]年級',           # 經濟系一年級、資工系1年級
         r'(\S+系)\s*[一1]',               # 經濟系一、資工系1
-        r'(\S+系)\s*[一二三四1234]年級',  # 經濟系一年級、資工系1年級
-        r'(\S+系)\s*[一二三四1234]',      # 經濟系一、資工系1
         r'(\S+系)\s*碩\s*[一二12]',       # 資工系碩一、經濟系碩二
         r'(\S+系\s*\d+年級)',            # 經濟系1年級（去除「年級」）
         r'(\S+系\s*\d+)',                # 經濟系1
         r'(\S+碩\s*\d+)',                # 資工碩1、經濟碩2
-        
-        # 新增：系所簡稱+數字（如「通訊三」、「資工3」）
-        r'([^\d\s]+?)\s*([一二三四1234])',
     ]
     
     for pattern in patterns:
         match = re.search(pattern, query)
         if match:
-            # 處理雙群組匹配（系所簡稱+數字）
-            if len(match.groups()) == 2:
-                dept = match.group(1).strip()
-                num_str = match.group(2).strip()
-                
-                # 排除時間關鍵詞與其他非系所詞彙
-                if any(k in dept for k in ['週', '周', '星期', '禮拜', '第', '大', '碩', '年']):
-                    continue
-                
-                num = chinese_numbers.get(num_str, num_str)
-                if '系' not in dept:
-                    dept += '系'
-                return f"{dept}{num}"
-
             grade = match.group(1).strip()
             
             # 處理「一年級」格式
@@ -291,15 +221,11 @@ def extract_grade_from_query(query: str) -> Optional[str]:
                         return f"{dept}碩3"
             
             # 處理「一」格式（排除碩士班）
-            # 處理「一二三四」格式（排除碩士班與年級字樣）
-            # 這裡處理如「通訊系三」的情況
-            num_match = re.search(r'[一二三四1234]', query)
-            if num_match and '年級' not in query and '大' not in query and '碩' not in query:
+            if '一' in query and '一年級' not in query and '大一' not in query and '碩一' not in query:
                 dept_match = re.search(r'(\S+系)', grade)
                 if dept_match:
                     dept = dept_match.group(1)
-                    num = chinese_numbers.get(num_match.group(0), num_match.group(0))
-                    return f"{dept}{num}"
+                    return f"{dept}1"
             
             # 移除「年級」字樣
             grade = grade.replace('年級', '').strip()
@@ -473,41 +399,6 @@ def check_grade_required_from_json(course: Dict, target_grade: str) -> Optional[
                     diff = target_grade[len(grade_item):].strip()
                     # 如果差異是一個字母，這是有效的匹配
                     if len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']:
-                        if '必' in required_item:
-                            return '必'
-                        elif '選' in required_item:
-                            return '選'
-            
-            # 情況3：系所名稱模糊匹配（處理「通訊系3」匹配「通訊工程學系3」）
-            # 修正：將邏輯移入迴圈內，確保檢查每一筆 mapping
-            for grade_item, required_item in mapping:
-                g_norm = grade_item.replace('學系', '').replace('系', '')
-                t_norm = target_grade.replace('學系', '').replace('系', '')
-                
-                # 處理中文數字
-                trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
-                g_norm = g_norm.translate(trans_table)
-                t_norm = t_norm.translate(trans_table)
-                
-                g_nums = re.findall(r'\d+', g_norm)
-                t_nums = re.findall(r'\d+', t_norm)
-                t_num = t_nums[0] if t_nums else ''
-                
-                g_text = re.sub(r'\d+', '', g_norm).strip()
-                t_text = re.sub(r'\d+', '', t_norm).strip()
-                
-                # 數字匹配邏輯修正
-                num_match = False
-                if t_num and not g_nums:
-                    if '必' in required_item:
-                        num_match = False
-                    else:
-                        num_match = True
-                else:
-                    num_match = (not g_nums) or (t_num and t_num in g_nums)
-                
-                if num_match:
-                    if g_text and t_text and (g_text in t_text or t_text in g_text):
                         if '必' in required_item:
                             return '必'
                         elif '選' in required_item:
@@ -696,50 +587,9 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
                 # 標準匹配：grade_item 以 target_grade 開頭
                 if grade_item.startswith(target_grade):
                     diff = grade_item[len(target_grade):].strip()
-                    # 允許：
-                    # 1. 單個字母 (A, B...)
-                    # 2. 非數字開頭的字串 (法學組, 智財組...) -> 避免 1 匹配 11
-                    # 3. 空字串 (完全匹配)
-                    if len(diff) == 0 or \
-                       (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
-                       (len(diff) > 0 and not diff[0].isdigit()):
+                    # 如果差異是一個字母（A, B, C, D），這是有效的匹配
+                    if len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']:
                         # 檢查是否已經在結果中（避免重複）
-                        if not any(g == grade_item for g, _ in results):
-                            required_status = '必' if '必' in required_item else '選' if '選' in required_item else required_item
-                            results.append((grade_item, required_status))
-            
-            # 情況3：系所名稱模糊匹配（處理「通訊系3」匹配「通訊工程學系3A」）
-            # 情況3：系所名稱模糊匹配（處理「通訊系3」匹配「通訊工程學系3」）
-            # 修正：將邏輯移入迴圈內
-            for grade_item, required_item in mapping:
-                g_norm = grade_item.replace('學系', '').replace('系', '')
-                t_norm = target_grade.replace('學系', '').replace('系', '')
-                
-                # 處理中文數字
-                trans_table = str.maketrans({'一': '1', '二': '2', '三': '3', '四': '4'})
-                g_norm = g_norm.translate(trans_table)
-                t_norm = t_norm.translate(trans_table)
-                
-                g_nums = re.findall(r'\d+', g_norm)
-                t_nums = re.findall(r'\d+', t_norm)
-                t_num = t_nums[0] if t_nums else ''
-                
-                g_text = re.sub(r'\d+', '', g_norm).strip()
-                t_text = re.sub(r'\d+', '', t_norm).strip()
-                
-                # 數字匹配：目標年級在列表內，或課程不分年級
-                # 數字匹配邏輯修正
-                num_match = False
-                if t_num and not g_nums:
-                    if '必' in required_item:
-                        num_match = False
-                    else:
-                        num_match = True
-                else:
-                    num_match = (not g_nums) or (t_num and t_num in g_nums)
-                
-                if num_match:
-                    if g_text and t_text and (g_text in t_text or t_text in g_text):
                         if not any(g == grade_item for g, _ in results):
                             required_status = '必' if '必' in required_item else '選' if '選' in required_item else required_item
                             results.append((grade_item, required_status))
