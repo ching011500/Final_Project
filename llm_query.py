@@ -890,9 +890,9 @@ class CourseQuerySystem:
                     return f"很抱歉，沒有找到符合時間條件的課程。請嘗試調整查詢條件。"
         
         # 年級和必選修條件補強：若結果太少，再全量掃描一次 collection 依年級/系所/必選修補充
-        # 這確保不會漏掉任何符合條件的課程（特別是開課系所不同的課程，如「會計學」對「統計系2」）
-        # 當有指定年級和必選修時，如果過濾後的結果少於預期數量，進行全量掃描補強
-        if target_grade and need_required_filter and len(relevant_courses) < n_results * 2:
+        # 這確保不會漏掉任何符合條件的課程（特別是開課系所不同的課程，如「中級會計學」對「統計系3」）
+        # 當有指定年級和必選修時，進行全量掃描補強，確保不會漏掉任何符合條件的課程
+        if target_grade and need_required_filter:
             try:
                 total = self.rag_system.collection.count()
                 batch_size = 500
@@ -994,7 +994,9 @@ class CourseQuerySystem:
                             'hybrid_score': 0.0
                         })
                         
-                        if len(relevant_courses) >= n_results * 3:
+                        # 繼續掃描，不限制數量，確保找到所有符合條件的課程
+                        # 但為了避免過度掃描，可以設定一個合理的上限
+                        if len(relevant_courses) >= n_results * 5:
                             return True
                     return False
 
@@ -1085,7 +1087,7 @@ class CourseQuerySystem:
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
         context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required, target_dept=target_dept)
         
-        # 若有時間條件，直接用分組結果生成 deterministic 回覆，避免 LLM 合併不同時段
+        # 若有時間條件，直接用分組結果生成 deterministic 回覆（單一顯示，不進行合併）
         if time_condition.get('day') or time_condition.get('period'):
             # 進一步依系所過濾：只依賴年級欄位
             if target_dept:
@@ -1136,7 +1138,9 @@ class CourseQuerySystem:
                 if g['serials']:
                     lines.append(f"課程代碼：{', '.join(g['serials'])}")
                 if g['teachers']:
-                    lines.append(f"授課教師：{' & '.join(sorted(g['teachers']))}")
+                    # 單一顯示：每個課程單獨顯示，教師以 | 區隔
+                    teachers_list = sorted(g['teachers'])
+                    lines.append(f"授課教師：{'|'.join(teachers_list)}")
                 if g['required']:
                     lines.append(f"必選修：{g['required']}")
                 if g['schedule']:
@@ -1215,33 +1219,14 @@ class CourseQuerySystem:
        學分數：如3
        年級：如XX系1
        ```
-   - 強制要求：在顯示課程之前，必須先按照「課程名稱 + 上課時間 + 系所（含日間/進修/進修部字樣）」進行分組，日間與進修部絕對不可合併。
-   - 按照「課程名稱 + 上課時間」進行分組為例，則如所有「統計學 + 每週四2~4」的課程歸為一組，而所有「統計學 + 每週五3~5」的課程歸為另一組。
-   - 優先順序：先顯示課程名稱不同的課程。
-   - 合併顯示規則（必須執行）：
-        1) 如果多筆課程的「課程名稱相同」且「上課時間完全相同」，則必須合併為一筆顯示。
-        2) 合併時，在「授課教師」欄位必須顯示所有教師，並以「、」來串接，格式為：「教師A、教師B、教師C、教師D」，A、B、C、D教師各代表一門課。
-        3) 同一門課有兩個以上的授課老師，則以「|」來區隔，格式如「教師A|教師B、教師C|教師D」，代表AB同一門，CD為同一門。
-        4) 若非合併顯示規則，但教師若有兩人以上，則仍以「|」來區隔，如「教師A|教師B|教師C」
-        5) 合併時，課程代碼必須全部列出，並用逗號分隔（例如：U1017, U1166, U1011, U1012）。
-        6) 絕對不要分開顯示相同課程名稱和相同上課時間的課程。 
-        7)合併時的顯示方式：
-            - 課程名稱：顯示一次即可
-            - 課程代碼：列出所有課程代碼，用逗號分隔（例如：U1017, U1166, U1011, U1012）
-            - 授課教師：依前述規則，必須顯示為「教師A、教師B、教師C、教師D」或「師A|教師B、教師C|教師D」的格式。   
-            - 上課時間：顯示一次即可
-            - 系所：顯示一次即可
-            - 必選修類型：顯示一次即可
-            - 學分數：顯示一次即可
-            - 年級：顯示一次即可
-
-   - 分開顯示規則：
-        1) 如果課程名稱相同但「上課時間不同」，則分開顯示，每筆獨立列出。
-        2) 例如：如果有2個「統計學」課程，一個是「每週四2~4」，另一個是「每週五3~5」，則分開顯示兩筆。
+   - 顯示規則（必須執行）：
+        1) 每筆課程都必須單獨顯示，不進行合併。
+        2) 即使課程名稱相同、上課時間相同，也要分開顯示。
+        3) 同一門課有兩個以上的授課老師，則以「|」來區隔，格式如「教師A|教師B|教師C」
    
    - 顯示格式：每筆課程必須包含：
-        * 課程名稱、課程代碼（必須是資料中實際的課程代碼，合併時列出所有）
-        * 授課教師（必須是資料中實際的教師姓名，合併時照上述合併時規則顯示所有教師）
+        * 課程名稱、課程代碼（必須是資料中實際的課程代碼）
+        * 授課教師（必須是資料中實際的教師姓名，若有多位教師則以「|」區隔）
         * 系所、必選修類型（明確標示為「必修」或「選修」，除非資料本身不是標明此兩者）
         * 上課時間、學分數、年級（必須是資料中實際的資訊）     
   
@@ -1249,38 +1234,36 @@ class CourseQuerySystem:
         - 先顯示課程名稱不同的課程
         - 相同課程名稱的，按照上課時間排序
    
-   - 範例1：如果有4個「統計學」課程，都是「每週四2~4」，但教師不同（林定香、莊惠菁、朱是鍇、謝璦如），各自對應的課程代碼是（U1017, U1166, U1011, U1012），則必須合併顯示為：
+   - 範例：如果有4個「統計學」課程，都是「每週四2~4」，但教師不同，各自對應的課程代碼是（U1017, U1166, U1011, U1012），則必須分開顯示為4筆：
        ```
        課程名稱：統計學 / Statistics
-       課程代碼：U1017, U1166, U1011, U1012
-       授課教師：朱是鍇、謝璦如、林定香、莊惠菁
+       課程代碼：U1017
+       授課教師：林定香
+       系所：統計系
+       必選修類型：必修
+       上課時間：每週四2~4
+       學分數：3
+       年級：統計系1
+       
+       課程名稱：統計學 / Statistics
+       課程代碼：U1166
+       授課教師：莊惠菁
        系所：統計系
        必選修類型：必修
        上課時間：每週四2~4
        學分數：3
        年級：統計系1
        ```
-   
-   - 範例2：如果資料中有5筆「專題製作I」課程，時間僅顯示「每週為維護0」，教師分別是「王鵬華|沈瑞欽、江振宇|魏存毅、許裕彬|余帝穀、李文玄、白宏達|李忠益」，對應的課程代碼是「U3091, U3094, U3141, U3148, U3152」，則必須合併顯示為：
-       ```
-       課程名稱：專題製作I / Senior Projects I
-       課程代碼：U3091, U3094, U3141, U3148, U3152
-       授課教師：王鵬華|沈瑞欽、江振宇|魏存毅、許裕彬|余帝穀、李文玄、白宏達|李忠益
-       系所：通訊系
-       必選修類型：必修
-       上課時間：每週
-       學分數：2
-       年級：通訊系3
-       ```
+       （以此類推，顯示所有4筆）
    
    - 只有在「相關課程資料」中完全沒有任何符合條件的課程時，才告訴使用者沒有找到。
   
    - 可以根據課程限制、選課人數等資訊提供建議。
    
    - 重要：計算和顯示課程數量時：
-        * 請按照「合併後的課程名稱」來計算，不是按照原始資料筆數。
-        * 例如：如果有4筆「統計學」課程合併為1筆，加上1筆「電腦概論」課程，總共應該顯示「共找到 2 個符合條件的課程」。
-        * 不要顯示「前 N 個」，而是顯示實際合併後的課程數量
+        * 請按照實際的課程筆數來計算，每筆課程都單獨計算。
+        * 例如：如果有4筆「統計學」課程，加上1筆「電腦概論」課程，總共應該顯示「共找到 5 個符合條件的課程」。
+        * 不要顯示「前 N 個」，而是顯示實際的課程數量
    
    - 回覆課程資訊之整體格式：
         * 先開頭句，含問候。
@@ -1290,7 +1273,7 @@ class CourseQuerySystem:
         
    - 課堂數量限制:
         * 課程一次最多顯示15筆。
-        * 如果計算的課程數量(已把合併考慮進去)超過15筆，則僅顯示15筆，並告知課程未完全顯示，並要求提問者修改提問方式，縮小查詢範圍。
+        * 如果課程數量超過15筆，則僅顯示15筆，並告知課程未完全顯示，並要求提問者修改提問方式，縮小查詢範圍。
 
    - 課堂範圍限制:
         * 若系所、應修系級出現北醫大(全名台北醫學大學，或簡稱北醫)、北科大(全名臺北科技大學，或簡稱北科)相關課程，一律不顯示。
@@ -1365,7 +1348,9 @@ class CourseQuerySystem:
             if info['serials']:
                 context_parts.append(f"課程代碼：{', '.join(info['serials'])}")
             if info['teachers']:
-                context_parts.append(f"授課教師：{' & '.join(sorted(info['teachers']))}")
+                # 單一顯示：每個課程單獨顯示，教師以 | 區隔
+                teachers_list = sorted(info['teachers'])
+                context_parts.append(f"授課教師：{'|'.join(teachers_list)}")
             if info['dept']:
                 context_parts.append(f"系所：{info['dept']}")
             if info['required']:
@@ -1462,53 +1447,38 @@ class CourseQuerySystem:
         return "\n".join(context_parts)
 
     def _group_courses(self, courses: List[Dict]) -> List[Dict]:
-        """依 課名+時間+系所 分組，確保不同時段/進修部不被合併"""
-        def normalize_dept(d):
-            return d.strip() if d else ""
-        def normalize_sched(s):
-            return s.strip() if s else ""
-        grouped = {}
+        """將課程轉換為單一顯示格式（不進行合併）"""
+        result = []
         for course in courses:
             metadata = course.get('metadata', {}) or {}
             document = course.get('document', '') or ''
             name = metadata.get('name', '')
-            dept = normalize_dept(metadata.get('dept', ''))
-            schedule = normalize_sched(metadata.get('schedule', ''))
+            dept = metadata.get('dept', '').strip() if metadata.get('dept') else ''
+            schedule = metadata.get('schedule', '').strip() if metadata.get('schedule') else ''
             serial = metadata.get('serial', '')
             teacher = metadata.get('teacher', '')
             required = metadata.get('required', '')
             grade = metadata.get('grade', '')
             mapping_json = metadata.get('grade_required_mapping', '')
+            
             if not schedule and document:
                 import re
                 m = re.search(r'上課時間：([^\n]+)', document)
                 if m:
                     schedule = m.group(1).strip()
-            key = (name, schedule, dept)
-            if key not in grouped:
-                grouped[key] = {
-                    'name': name,
-                    'schedule': schedule,
-                    'dept': dept,
-                    'serials': [],
-                    'teachers': set(),
-                    'required': required,
-                    'grade': grade,
-                    'documents': [],
-                    'grade_required_mapping': mapping_json
-                }
-            if serial:
-                grouped[key]['serials'].append(serial)
-            if teacher:
-                grouped[key]['teachers'].add(teacher)
-            grouped[key]['documents'].append(document)
-            if required and not grouped[key]['required']:
-                grouped[key]['required'] = required
-            if grade and not grouped[key]['grade']:
-                grouped[key]['grade'] = grade
-            if mapping_json and not grouped[key]['grade_required_mapping']:
-                grouped[key]['grade_required_mapping'] = mapping_json
-        return list(grouped.values())
+            
+            result.append({
+                'name': name,
+                'schedule': schedule,
+                'dept': dept,
+                'serials': [serial] if serial else [],
+                'teachers': {teacher} if teacher else set(),
+                'required': required,
+                'grade': grade,
+                'documents': [document],
+                'grade_required_mapping': mapping_json
+            })
+        return result
 
 
 if __name__ == "__main__":
