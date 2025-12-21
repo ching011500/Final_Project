@@ -929,7 +929,9 @@ class CourseQuerySystem:
                         course_name = md.get('name', '')
                         course_serial = md.get('serial', '')
                         if '中級會計' in course_name or '計算機結構' in course_name:
-                            print(f"  🔍 找到相關課程: {course_name} ({course_serial}), grade_text={grade_text}")
+                            print(f"  🔍 找到相關課程: {course_name} ({course_serial})")
+                            print(f"      grade_text: {grade_text}")
+                            print(f"      target_dept: {target_dept}")
                             print(f"      grade_has_target_dept: {grade_has_target_dept(grade_text, target_dept) if target_dept else 'N/A'}")
                         
                         # 檢查年級匹配（使用 grade_matches 的邏輯）
@@ -943,6 +945,8 @@ class CourseQuerySystem:
                                 for grade_item, _ in mapping:
                                     if grade_item == target_grade:
                                         found_grade_match = True
+                                        if '中級會計' in course_name or '計算機結構' in course_name:
+                                            print(f"      ✓ 年級匹配（mapping）: {grade_item} == {target_grade}")
                                         break
                                     elif grade_item.startswith(target_grade):
                                         diff = grade_item[len(target_grade):].strip()
@@ -950,8 +954,12 @@ class CourseQuerySystem:
                                            (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
                                            (len(diff) > 0 and not diff[0].isdigit()):
                                             found_grade_match = True
+                                            if '中級會計' in course_name or '計算機結構' in course_name:
+                                                print(f"      ✓ 年級匹配（mapping，部分）: {grade_item} starts with {target_grade}")
                                             break
-                            except:
+                            except Exception as e:
+                                if '中級會計' in course_name or '計算機結構' in course_name:
+                                    print(f"      ❌ mapping_json 解析失敗: {e}")
                                 pass
                         
                         if not found_grade_match:
@@ -980,13 +988,21 @@ class CourseQuerySystem:
                                 course_dict = {'grade_required_mapping': mapping_json}
                                 all_matches = check_grades_required_from_json(course_dict, target_grade)
                                 if all_matches:
+                                    if '中級會計' in course_name or '計算機結構' in course_name:
+                                        print(f"      all_matches: {all_matches}")
                                     for _, req_status in all_matches:
                                         if req_status == target_required:
                                             grade_required_status = target_required
+                                            if '中級會計' in course_name or '計算機結構' in course_name:
+                                                print(f"      ✓ 必選修匹配（mapping）: {req_status} == {target_required}")
                                             break
                                     if grade_required_status is None:
                                         grade_required_status = all_matches[0][1]
-                            except:
+                                        if '中級會計' in course_name or '計算機結構' in course_name:
+                                            print(f"      ⚠️ 必選修狀態不匹配: {grade_required_status} != {target_required}")
+                            except Exception as e:
+                                if '中級會計' in course_name or '計算機結構' in course_name:
+                                    print(f"      ❌ check_grades_required_from_json 失敗: {e}")
                                 pass
                         
                         if grade_required_status is None and grade_text and required:
@@ -1002,6 +1018,8 @@ class CourseQuerySystem:
                         # 去重
                         key = md.get('serial', '') + md.get('schedule', '')
                         if key in seen_ids:
+                            if '中級會計' in course_name or '計算機結構' in course_name:
+                                print(f"      ⚠️ 課程已存在（去重）: {course_name} ({course_serial})")
                             continue
                         seen_ids.add(key)
                         
