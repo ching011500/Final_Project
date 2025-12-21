@@ -1282,14 +1282,15 @@ class CourseQuerySystem:
                             # 時間匹配
                             if not check_time_match(schedule, time_condition):
                                 continue
-                            # 系所匹配（若有）：只依賴年級欄位
+                            # 系所匹配（若有）：必須同時滿足年級欄位和開課系所
                             if target_dept:
                                 grade_text = md.get('grade', '')
                                 dept_text = md.get('dept', '')
-                                # 使用寬鬆匹配：年級或開課系所符合皆可
+                                # 必須同時滿足：年級欄位中包含目標系所，且開課系所也要匹配
                                 grade_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
                                 dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
-                                if not (grade_ok or dept_ok):
+                                # 必須同時滿足 grade_ok 和 dept_ok，避免誤匹配其他系開設的課程
+                                if not (grade_ok and dept_ok):
                                     continue
                             # 必修匹配（若有）
                             if need_required_filter and target_required:
@@ -1349,7 +1350,7 @@ class CourseQuerySystem:
         
         # 若有時間條件，直接用分組結果生成 deterministic 回覆（單一顯示，不進行合併）
         if time_condition.get('day') or time_condition.get('period'):
-            # 進一步依系所過濾：只依賴年級欄位
+            # 進一步依系所過濾：優先使用年級欄位，避免誤匹配開課系所
             if target_dept:
                 filtered = []
                 # 定義學院映射關係（確保在確定性模式下也能匹配院級課程）
@@ -1372,8 +1373,17 @@ class CourseQuerySystem:
                     dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
                     college_ok = any(kw in grade_text for kw in college_keywords) if grade_text else False
                     
-                    if grade_ok or dept_ok or college_ok:
+                    # 當有時間條件時，必須同時滿足：
+                    # 1. 年級欄位中包含目標系所（grade_ok）
+                    # 2. 開課系所也要匹配（dept_ok），避免顯示其他系開設但年級欄位中包含目標系所的課程
+                    # 或者學院級課程（college_ok）
+                    if grade_ok and dept_ok:
+                        # 年級欄位和開課系所都匹配，優先顯示
                         filtered.append(c)
+                    elif grade_ok and college_ok:
+                        # 學院級課程（例如「電資院1」）也可以匹配
+                        filtered.append(c)
+                    # 不包含只有 grade_ok 或只有 dept_ok 的情況，避免誤匹配
                 if filtered:
                     relevant_courses = filtered
             # 如果沒有明確系所，但關鍵詞有「體育」，也只保留系所含「體育」
