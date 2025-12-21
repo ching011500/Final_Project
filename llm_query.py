@@ -486,12 +486,20 @@ class CourseQuerySystem:
                     
                     # 如果有 target_grade 但無法確定 grade_required (例如法律系分組導致匹配失敗)，嘗試退回使用 meta_required
                     if is_required is False and target_grade and grade_required is None:
-                        # 修正：只針對法律系等特殊系所啟用此 fallback，避免一般系所的大一必修課誤入大三查詢
+                        meta_required = metadata.get('required', '')
+                        
+                        # 修正：只針對法律系等特殊系所啟用此 fallback
                         if '法律' in target_grade or '法學' in target_grade or '司法' in target_grade or '財法' in target_grade:
-                            meta_required = metadata.get('required', '')
                             if target_required == '必' and '必' in meta_required:
                                 is_required = True
                             elif target_required == '選' and '選' in meta_required:
+                                is_required = True
+                        
+                        # 新增：針對選修課程的放寬策略
+                        elif '選' in meta_required and '必' not in meta_required:
+                            grade_val = metadata.get('grade', '')
+                            # 如果 grade 欄位沒有數字，視為全系選修
+                            if not any(c.isdigit() for c in grade_val):
                                 is_required = True
                             
                     elif need_required_filter and not target_grade:
@@ -1045,10 +1053,16 @@ class CourseQuerySystem:
             return d.strip() if d else ""
         def normalize_sched(s):
             return s.strip() if s else ""
+        # 新增：名稱正規化（處理全形冒號）
+        def normalize_name(n):
+            if not n: return ""
+            return n.replace('：', ':').strip()
+            
         grouped = {}
         for course in courses:
             metadata = course.get('metadata', {}) or {}
             document = course.get('document', '') or ''
+            name = normalize_name(metadata.get('name', '')) # 使用正規化後的名稱
             name = metadata.get('name', '')
             dept = normalize_dept(metadata.get('dept', ''))
             schedule = normalize_sched(metadata.get('schedule', ''))
@@ -1097,6 +1111,8 @@ class CourseQuerySystem:
             
             info['serials'] = [x['serial'] for x in info['course_items'] if x['serial']]
             # 提取對應的教師列表 (若資料庫中多位教師以逗號分隔，替換為 & 以符合 Prompt 要求)
+            # 同時處理 | 分隔符
+            info['teachers'] = [x['teacher'].replace(',', '&').replace('|', '&') if x['teacher'] else '' for x in info['course_items']]
             info['teachers'] = [x['teacher'].replace(',', '&') if x['teacher'] else '' for x in info['course_items']]
             
             results.append(info)

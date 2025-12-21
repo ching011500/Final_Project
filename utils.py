@@ -71,16 +71,13 @@ def check_grade_required(course: Dict, target_grade: str) -> Optional[str]:
         # 避免「1」匹配「1A」或「經濟系1」匹配「經濟系1A」
         
         # 情況1：target_grade 是 grade_item 的前綴，且差異只有一個字母（A, B, C, D）
-        # 例如：「經濟系1」 + "A" = 「經濟系1A」，這種情況不應該匹配
+        # 例如：「經濟系1」匹配「經濟系1A」
         if grade_item.startswith(target_grade):
             # 檢查差異部分
             diff = grade_item[len(target_grade):].strip()
-            # 如果差異只有一個字母（A, B, C, D），這是誤匹配，跳過
-            if len(diff) == 1 and diff in ['A', 'B', 'C', 'D']:
-                continue  # 跳過誤匹配
-            diff = target_grade[len(grade_item):].strip()
+            
             # 允許差異為空，或是字母（A, B...），或是非數字（組別等）
-            # 這樣可以讓「通訊系3」匹配「通訊系3A」
+            # 這樣可以讓「通訊系1」匹配「通訊系1A」，也可以讓「通訊系3」匹配「通訊系3A」
             if len(diff) == 0 or \
                (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
                (len(diff) > 0 and not diff[0].isdigit()):
@@ -699,8 +696,13 @@ def check_grades_required_from_json(course: Dict, target_grade: str) -> List[Tup
                 # 標準匹配：grade_item 以 target_grade 開頭
                 if grade_item.startswith(target_grade):
                     diff = grade_item[len(target_grade):].strip()
-                    # 如果差異是一個字母（A, B, C, D），這是有效的匹配
-                    if len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']:
+                    # 允許：
+                    # 1. 單個字母 (A, B...)
+                    # 2. 非數字開頭的字串 (法學組, 智財組...) -> 避免 1 匹配 11
+                    # 3. 空字串 (完全匹配)
+                    if len(diff) == 0 or \
+                       (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
+                       (len(diff) > 0 and not diff[0].isdigit()):
                         # 檢查是否已經在結果中（避免重複）
                         if not any(g == grade_item for g, _ in results):
                             required_status = '必' if '必' in required_item else '選' if '選' in required_item else required_item
