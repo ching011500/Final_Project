@@ -411,6 +411,10 @@ class CourseQuerySystem:
                 if not tk:
                     continue
                 
+                # 排除學程名稱（包含「學程」的 token 不應該匹配）
+                if '學程' in tk:
+                    continue
+                
                 # 1. 精確匹配完整系名 (e.g. "法律系" matches "法律系...")
                 if tk.startswith(target_dept):
                     return True
@@ -914,6 +918,13 @@ class CourseQuerySystem:
                         # 檢查年級匹配
                         grade_text = md.get('grade', '')
                         if not grade_text:
+                            continue
+                        
+                        dept_text = md.get('dept', '')
+                        
+                        # 排除學位學程與微學程
+                        if '學位學程' in grade_text or '微學程' in grade_text or \
+                           '學位學程' in dept_text or '微學程' in dept_text:
                             continue
                         
                         # 調試：每檢查100個課程打印一次進度
