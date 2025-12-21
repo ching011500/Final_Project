@@ -922,8 +922,8 @@ class CourseQuerySystem:
                         # 調試：檢查是否找到「中級會計學」
                         course_name = md.get('name', '')
                         course_serial = md.get('serial', '')
-                        if '中級會計' in course_name:
-                            print(f"  🔍 找到中級會計學相關課程: {course_name} ({course_serial}), grade_text={grade_text}")
+                        if '中級會計' in course_name or '計算機結構' in course_name:
+                            print(f"  🔍 找到相關課程: {course_name} ({course_serial}), grade_text={grade_text}")
                             print(f"      grade_has_target_dept: {grade_has_target_dept(grade_text, target_dept) if target_dept else 'N/A'}")
                         
                         # 檢查年級匹配（使用 grade_matches 的邏輯）
@@ -989,7 +989,7 @@ class CourseQuerySystem:
                         
                         # 如果有指定必選修要求，檢查是否符合；如果沒有指定，則接受所有課程
                         if need_required_filter and grade_required_status != target_required:
-                            if '中級會計' in course_name:
+                            if '中級會計' in course_name or '計算機結構' in course_name:
                                 print(f"      ❌ 必選修匹配失敗: {course_name}, grade_required_status={grade_required_status}, target_required={target_required}")
                             continue
                         
