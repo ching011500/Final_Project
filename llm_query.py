@@ -446,8 +446,24 @@ class CourseQuerySystem:
                     dept_text = metadata.get('dept', '')
                     
                     # 排除學位學程與微學程
-                    if '學位學程' in grade_text or '微學程' in grade_text or \
-                       '學位學程' in dept_text or '微學程' in dept_text:
+                    # 修正：只排除「只屬於」學位學程或微學程的課程，而不是排除所有包含學位學程名稱的課程
+                    # 檢查 grade_text 中是否「只有」學位學程或微學程（沒有系所年級）
+                    tokens = re.split(r'[\\|,，/\\s]+', grade_text) if grade_text else []
+                    has_dept_grade = False
+                    for tk in tokens:
+                        if not tk:
+                            continue
+                        # 檢查是否包含系所年級（例如「通訊系3」、「資工系2」等）
+                        if re.search(r'系\d+|系[一二三四]', tk):
+                            has_dept_grade = True
+                            break
+                    
+                    # 如果 grade_text 中只有學位學程或微學程，沒有系所年級，則排除
+                    if not has_dept_grade and ('學位學程' in grade_text or '微學程' in grade_text):
+                        continue
+                    
+                    # 如果 dept_text 是學位學程或微學程，則排除
+                    if '學位學程' in dept_text or '微學程' in dept_text:
                         continue
                     
                     # 定義學院映射關係（解決微積分、物理等院級課程匹配問題）
@@ -615,10 +631,11 @@ class CourseQuerySystem:
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
                 
-                # 調試：檢查計算機結構
+                # 調試：檢查特定課程
                 course_name_debug = metadata.get('name', '')
-                if '計算機結構' in course_name_debug:
-                    print(f"  🔍 [初始過濾] 檢查計算機結構:")
+                debug_courses = ['計算機結構', '通訊原理', '多媒體訊號處理', '專題製作']
+                if any(dc in course_name_debug for dc in debug_courses):
+                    print(f"  🔍 [初始過濾] 檢查 {course_name_debug}:")
                     print(f"      target_grade: {target_grade}, target_required: {target_required}")
                     print(f"      grade_text: {metadata.get('grade', '')}")
                     print(f"      required: {metadata.get('required', '')}")
@@ -860,10 +877,13 @@ class CourseQuerySystem:
                 
                 # 同時滿足所有條件
                 # 當有指定年級時，必須同時滿足 grade_matches（年級匹配）
-                if '計算機結構' in course_name_debug:
+                debug_courses = ['計算機結構', '通訊原理', '多媒體訊號處理', '專題製作']
+                if any(dc in course_name_debug for dc in debug_courses):
                     print(f"      [初始過濾] 最終檢查: dept_matches={dept_matches}, grade_matches={grade_matches}, is_required={is_required}, time_matches={time_matches}")
                     if not (dept_matches and grade_matches and is_required and time_matches):
-                        print(f"      ❌ [初始過濾] 計算機結構被過濾掉")
+                        print(f"      ❌ [初始過濾] {course_name_debug} 被過濾掉")
+                    else:
+                        print(f"      ✓ [初始過濾] {course_name_debug} 通過過濾")
                 
                 if dept_matches and grade_matches and is_required and time_matches:
                     filtered_courses.append(course)
