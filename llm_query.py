@@ -892,7 +892,9 @@ class CourseQuerySystem:
         # 年級和必選修條件補強：若結果太少，再全量掃描一次 collection 依年級/系所/必選修補充
         # 這確保不會漏掉任何符合條件的課程（特別是開課系所不同的課程，如「中級會計學」對「統計系3」）
         # 當有指定年級和必選修時，進行全量掃描補強，確保不會漏掉任何符合條件的課程
+        # 補強邏輯在過濾之後執行，直接添加到 relevant_courses，不需要再次過濾
         if target_grade and need_required_filter:
+            print(f"🔍 執行補強邏輯：target_grade={target_grade}, target_required={target_required}, 當前結果數={len(relevant_courses)}")
             try:
                 total = self.rag_system.collection.count()
                 batch_size = 500
@@ -994,6 +996,11 @@ class CourseQuerySystem:
                             'hybrid_score': 0.0
                         })
                         
+                        # 打印找到的課程信息以便調試
+                        course_name = md.get('name', '')
+                        course_serial = md.get('serial', '')
+                        print(f"  ✓ 補強邏輯找到課程: {course_name} ({course_serial})")
+                        
                         # 繼續掃描，不限制數量，確保找到所有符合條件的課程
                         # 但為了避免過度掃描，可以設定一個合理的上限
                         if len(relevant_courses) >= n_results * 5:
@@ -1013,8 +1020,14 @@ class CourseQuerySystem:
                         if process_batch_for_grade_required(docs, metas):
                             break
             except Exception as e:
-                # 如果補強失敗，繼續使用原有結果
+                # 如果補強失敗，打印錯誤信息以便調試
+                print(f"⚠️ 補強邏輯執行失敗: {e}")
+                import traceback
+                traceback.print_exc()
+                # 繼續使用原有結果
                 pass
+            finally:
+                print(f"🔍 補強邏輯完成：最終結果數={len(relevant_courses)}")
         
         # 時間條件補強：若結果太少，再全量掃描一次 collection 依時間/系所（與必修需求）補充
         if time_condition.get('day') or time_condition.get('period'):
