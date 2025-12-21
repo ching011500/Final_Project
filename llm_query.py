@@ -615,6 +615,15 @@ class CourseQuerySystem:
                 # 檢查必選修條件（考慮 grade 和 required 的對應關係）
                 is_required = True  # 預設為 True，如果沒有過濾條件就不過濾
                 
+                # 調試：檢查計算機結構
+                course_name_debug = metadata.get('name', '')
+                if '計算機結構' in course_name_debug:
+                    print(f"  🔍 [初始過濾] 檢查計算機結構:")
+                    print(f"      target_grade: {target_grade}, target_required: {target_required}")
+                    print(f"      grade_text: {metadata.get('grade', '')}")
+                    print(f"      required: {metadata.get('required', '')}")
+                    print(f"      grade_required_mapping: {metadata.get('grade_required_mapping', '')[:200] if metadata.get('grade_required_mapping') else '無'}...")
+                
                 # 只有在明確要求必選修過濾時才進行過濾
                 # 如果只指定年級但沒有必選修要求，則不過濾必選修
                 if need_required_filter:
@@ -721,13 +730,19 @@ class CourseQuerySystem:
                     if target_required and grade_required is not None:
                         # 有明確的必選修要求，檢查是否符合
                         is_required = (grade_required == target_required)
+                        if '計算機結構' in course_name_debug:
+                            print(f"      [初始過濾] grade_required={grade_required}, target_required={target_required}, is_required={is_required}")
                     elif target_grade and grade_required is not None:
                         # 有 grade 要求但沒有必選修要求，只要有對應的 grade 就通過
                         is_required = True
+                        if '計算機結構' in course_name_debug:
+                            print(f"      [初始過濾] grade_required={grade_required}, 沒有必選修要求, is_required={is_required}")
                     
                     # 如果有 target_grade 但無法確定 grade_required，必須使用 grade 和 required 欄位來檢查
                     # 不能直接使用 meta_required，因為需要對應到 target_grade
                     if is_required is False and target_grade and grade_required is None:
+                        if '計算機結構' in course_name_debug:
+                            print(f"      [初始過濾] grade_required 是 None，使用傳統方式檢查...")
                         # 從 metadata 或 document 中取得 grade 和 required
                         grade = metadata.get('grade', '')
                         required = metadata.get('required', '')
@@ -845,12 +860,22 @@ class CourseQuerySystem:
                 
                 # 同時滿足所有條件
                 # 當有指定年級時，必須同時滿足 grade_matches（年級匹配）
+                if '計算機結構' in course_name_debug:
+                    print(f"      [初始過濾] 最終檢查: dept_matches={dept_matches}, grade_matches={grade_matches}, is_required={is_required}, time_matches={time_matches}")
+                    if not (dept_matches and grade_matches and is_required and time_matches):
+                        print(f"      ❌ [初始過濾] 計算機結構被過濾掉")
+                
                 if dept_matches and grade_matches and is_required and time_matches:
                     filtered_courses.append(course)
             
             # 如果過濾後有結果，優先使用過濾後的結果（取多一點以便合併）
             if filtered_courses:
                 relevant_courses = filtered_courses[:n_results * 10]  # 大幅增加保留數量，避免因必修課分班多而擠掉選修課
+                # 調試：檢查過濾後的結果
+                print(f"  📊 過濾後結果數: {len(filtered_courses)}, 使用前 {len(relevant_courses)} 筆")
+                for i, c in enumerate(relevant_courses[:5]):
+                    md = c.get('metadata', {})
+                    print(f"      {i+1}. {md.get('name', '')} ({md.get('serial', '')})")
             else:
                 # 放寬策略：保留系所與時間條件，放寬必選修/年級過濾，避免空結果
                 # 但系所條件仍以年級欄位為準
@@ -1181,6 +1206,20 @@ class CourseQuerySystem:
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
         context = self._build_context(relevant_courses, target_grade=target_grade, target_required=target_required, target_dept=target_dept)
         
+        # 調試：檢查 context 中是否包含計算機結構
+        if '計算機結構' in context:
+            print(f"  ✓ context 中包含計算機結構")
+        else:
+            print(f"  ❌ context 中不包含計算機結構")
+            # 檢查 relevant_courses 中是否有計算機結構
+            for c in relevant_courses:
+                md = c.get('metadata', {})
+                if '計算機結構' in md.get('name', ''):
+                    print(f"  ⚠️ relevant_courses 中有計算機結構，但 context 中沒有")
+                    print(f"      課程名稱: {md.get('name', '')}")
+                    print(f"      課程代碼: {md.get('serial', '')}")
+                    break
+        
         # 若有時間條件，直接用分組結果生成 deterministic 回覆（單一顯示，不進行合併）
         if time_condition.get('day') or time_condition.get('period'):
             # 進一步依系所過濾：只依賴年級欄位
@@ -1375,12 +1414,15 @@ class CourseQuerySystem:
         * 若提問者查詢微學程、學士學位學程，也回應暫時不在查詢範圍
 【重要提醒】
 - 當你看到「相關課程資料」中有多筆標記為「✅ 這是必修課程」且系所為「資工系」的課程時，你必須全部列出，不要忽略任何一筆！
-- 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！"""
+- 絕對不要編造課程資訊！只能使用「相關課程資料」中實際存在的資訊！
+- **極其重要**：你必須列出「相關課程資料」中**所有**符合條件的課程，絕對不能遺漏任何一筆！如果資料中有 4 筆課程，你必須顯示 4 筆；如果有 5 筆，你必須顯示 5 筆。不要因為任何原因（如格式、長度等）而省略任何課程！"""
         
         user_prompt = f"""使用者問題：{user_question}
 
 以下是相關課程資料（已過濾出符合條件的課程，共 {len(relevant_courses)} 筆）：
 {context}
+
+**重要**：以上資料中共有 {len(relevant_courses)} 筆符合條件的課程，你必須**全部**列出，不能遺漏任何一筆！請仔細檢查每一筆課程資料，確保全部顯示。
 
 請仔細閱讀以上課程資料，並根據實際資料回答使用者的問題。
 
