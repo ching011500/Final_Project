@@ -450,6 +450,9 @@ class CourseQuerySystem:
             # 建立不含「系」的短版本，用於匹配省略「系」的情況（如「法律1」）
             target_dept_short = target_dept.replace('系', '') if '系' in target_dept else target_dept
             
+            # 檢查目標系所是否為學士班（不包含「碩」）
+            target_is_undergrad = '碩' not in target_dept
+            
             tokens = re.split(r'[\\|,，/\\s]+', grade_text)
             for tk in tokens:
                 if not tk:
@@ -457,6 +460,14 @@ class CourseQuerySystem:
                 
                 # 排除學程名稱（包含「學程」的 token 不應該匹配）
                 if '學程' in tk:
+                    continue
+                
+                # 如果目標是學士班，排除碩士班的 token（例如「資工碩1」不應該匹配「資工系2」）
+                if target_is_undergrad and '碩' in tk:
+                    continue
+                
+                # 如果目標是碩士班，排除學士班的 token（例如「資工系2」不應該匹配「資工碩1」）
+                if not target_is_undergrad and '系' in tk and '碩' not in tk:
                     continue
                 
                 # 1. 精確匹配完整系名 (e.g. "法律系" matches "法律系...")
@@ -470,6 +481,11 @@ class CourseQuerySystem:
                     next_ch = tk[len(target_dept_short)]
                     # 允許：數字、碩、年級、班級、組別、系
                     # 特別加入法律系常見分組字首：法、司、財
+                    # 但如果目標是學士班，不允許「碩」；如果目標是碩士班，不允許「系」（除非是「系碩」）
+                    if target_is_undergrad and next_ch == '碩':
+                        continue
+                    if not target_is_undergrad and next_ch == '系' and '碩' not in tk:
+                        continue
                     if next_ch in '1234567890碩一二三四ABCDEFX系法司財':
                         return True
             return False
@@ -559,6 +575,35 @@ class CourseQuerySystem:
                     # dept_matches = grade_match or dept_match or college_grade_match
                     
                     # 修正：優先使用應修系級 (grade) 判斷，避免開課系所造成的誤判
+                    # 特別處理：如果目標是學士班（不包含「碩」），排除碩士班的課程
+                    target_is_undergrad = '碩' not in target_dept
+                    if target_is_undergrad:
+                        # 檢查 grade_text 中是否只有碩士班的年級
+                        if grade_text:
+                            tokens = re.split(r'[\\|,，/\\s]+', grade_text)
+                            has_undergrad_grade = False
+                            has_master_grade_only = True
+                            for tk in tokens:
+                                if not tk:
+                                    continue
+                                if '學程' in tk:
+                                    continue
+                                # 檢查是否有學士班的年級（例如「資工系2」）
+                                if '系' in tk and '碩' not in tk:
+                                    has_undergrad_grade = True
+                                    has_master_grade_only = False
+                                    break
+                                # 檢查是否只有碩士班的年級（例如「資工碩1」）
+                                if '碩' in tk:
+                                    has_master_grade_only = True
+                                else:
+                                    has_master_grade_only = False
+                            
+                            # 如果只有碩士班的年級，沒有學士班的年級，則排除
+                            if has_master_grade_only and not has_undergrad_grade:
+                                dept_matches = False
+                                grade_match = False
+                    
                     if grade_match:
                         dept_matches = True
                     elif dept_match:
@@ -567,6 +612,24 @@ class CourseQuerySystem:
                             dept_matches = False
                         elif '體育' in grade_text and '體育' not in target_dept:
                             dept_matches = False
+                        # 如果目標是學士班，但開課系所是碩士班，且 grade_text 中只有碩士班的年級，則排除
+                        elif target_is_undergrad and '碩' in dept_text:
+                            # 檢查 grade_text 中是否有學士班的年級
+                            if grade_text:
+                                tokens = re.split(r'[\\|,，/\\s]+', grade_text)
+                                has_undergrad_grade = False
+                                for tk in tokens:
+                                    if not tk:
+                                        continue
+                                    if '學程' in tk:
+                                        continue
+                                    # 檢查是否有學士班的年級（例如「資工系2」）
+                                    if '系' in tk and '碩' not in tk:
+                                        has_undergrad_grade = True
+                                        break
+                                # 如果沒有學士班的年級，則排除
+                                if not has_undergrad_grade:
+                                    dept_matches = False
                         else:
                             # 若應修系級沒有明確排除（例如只寫「1」或「選修」），則接受開課系所
                             dept_matches = True
