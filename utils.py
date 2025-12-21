@@ -583,7 +583,7 @@ def check_time_match(schedule: str, time_condition: Dict[str, Optional[str]]) ->
     檢查課程的上課時間是否符合時間條件
     
     Args:
-        schedule: 上課時間字串，例如「每週二3~4 電1F02」
+        schedule: 上課時間字串，例如「每週二3~4 電1F02」或「每週三7~9 商2F05; 實習每週一3~4 商2F05」
         time_condition: 時間條件字典，例如 {'day': '週二', 'period': '早上'}
         
     Returns:
@@ -618,6 +618,17 @@ def check_time_match(schedule: str, time_condition: Dict[str, Optional[str]]) ->
     if period:
         # 提取節次範圍（更精確的模式，避免匹配到教室號碼）
         import re
+        
+        # 優先匹配主要上課時間，而不是實習時間
+        # 如果 schedule 中包含「實習」或「;」，優先檢查主要上課時間（「;」之前的部分）
+        main_schedule = schedule
+        if ';' in schedule:
+            # 分割主要上課時間和實習時間
+            parts = schedule.split(';')
+            main_schedule = parts[0].strip()
+            # 如果主要上課時間不符合條件，再檢查實習時間
+            # 但優先使用主要上課時間
+        
         # 匹配節次範圍：1~2、3~4、5~7、1-2、3-4 等
         # 但不匹配教室號碼（如「電1F02」中的「1」和「02」）
         # 節次通常在「週X」之後，且格式為「數字~數字」或「數字-數字」
@@ -633,8 +644,10 @@ def check_time_match(schedule: str, time_condition: Dict[str, Optional[str]]) ->
         ]
         
         period_match = False
+        
+        # 先檢查主要上課時間
         for pattern in time_patterns:
-            matches = re.findall(pattern, schedule)
+            matches = re.findall(pattern, main_schedule)
             for match in matches:
                 try:
                     start = int(match[0]) if match[0] else 0
@@ -661,6 +674,42 @@ def check_time_match(schedule: str, time_condition: Dict[str, Optional[str]]) ->
                     continue
             if period_match:
                 break
+        
+        # 如果主要上課時間不符合條件，且 schedule 中包含「實習」或「;」，不匹配實習時間
+        # 因為用戶查詢的是主要上課時間，而不是實習時間
+        if not period_match and (';' in schedule or '實習' in schedule):
+            return False
+        
+        # 如果主要上課時間不符合條件，且沒有「實習」標記，再檢查整個 schedule
+        if not period_match:
+            for pattern in time_patterns:
+                matches = re.findall(pattern, schedule)
+                for match in matches:
+                    try:
+                        start = int(match[0]) if match[0] else 0
+                        end = int(match[1]) if match[1] and match[1] else start
+                        
+                        # 只考慮合理的節次範圍（1-12節）
+                        if start >= 1 and start <= 12:
+                            if period == '早上':
+                                # 早上：1-4節
+                                if start >= 1 and start <= 4:
+                                    period_match = True
+                                    break
+                            elif period == '下午':
+                                # 下午：5-8節
+                                if start >= 5 and start <= 8:
+                                    period_match = True
+                                    break
+                            elif period == '晚上':
+                                # 晚上：9-12節
+                                if start >= 9 and start <= 12:
+                                    period_match = True
+                                    break
+                    except:
+                        continue
+                if period_match:
+                    break
         
         if not period_match:
             return False
