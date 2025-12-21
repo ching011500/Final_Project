@@ -16,7 +16,8 @@ from utils import (
     check_grade_required_from_json,
     check_grades_required_from_json,
     extract_time_from_query,
-    check_time_match
+    check_time_match,
+    parse_grade_required_mapping
 )
 
 # 載入環境變數
@@ -712,6 +713,7 @@ class CourseQuerySystem:
                                 pass
                     
                     # 根據 grade_required 判斷 is_required
+                    # 必須嚴格依照 grade 和 required 的對應關係來判斷
                     if target_required and grade_required is not None:
                         # 有明確的必選修要求，檢查是否符合
                         is_required = (grade_required == target_required)
@@ -719,13 +721,34 @@ class CourseQuerySystem:
                         # 有 grade 要求但沒有必選修要求，只要有對應的 grade 就通過
                         is_required = True
                     
-                    # 如果有 target_grade 但無法確定 grade_required (例如法律系分組導致匹配失敗)，嘗試退回使用 meta_required
+                    # 如果有 target_grade 但無法確定 grade_required，必須使用 grade 和 required 欄位來檢查
+                    # 不能直接使用 meta_required，因為需要對應到 target_grade
                     if is_required is False and target_grade and grade_required is None:
-                        meta_required = metadata.get('required', '')
-                        if target_required == '必' and '必' in meta_required:
-                            is_required = True
-                        elif target_required == '選' and '選' in meta_required:
-                            is_required = True
+                        # 從 metadata 或 document 中取得 grade 和 required
+                        grade = metadata.get('grade', '')
+                        required = metadata.get('required', '')
+                        
+                        # 如果 metadata 中沒有，從 document 中提取
+                        if not grade or not required:
+                            grade_match = re.search(r'年級：([^\n]+)', document)
+                            required_match = re.search(r'必選修：([^\n]+)', document)
+                            
+                            if grade_match:
+                                grade = grade_match.group(1).strip()
+                            if required_match:
+                                required = required_match.group(1).strip()
+                        
+                        # 使用 grade 和 required 欄位來檢查 target_grade 的必選修狀態
+                        if grade and required:
+                            course_dict = {'grade': grade, 'required': required}
+                            grade_required = check_grade_required(course_dict, target_grade)
+                            
+                            # 根據 grade_required 判斷 is_required
+                            if grade_required is not None:
+                                if target_required:
+                                    is_required = (grade_required == target_required)
+                                else:
+                                    is_required = True
                             
                     elif need_required_filter and not target_grade:
                         # 沒有 target_grade，但有必選修要求
@@ -768,21 +791,41 @@ class CourseQuerySystem:
                                     is_required = False
                         else:
                             # 沒有 grade_required_mapping，使用傳統方式檢查
-                            meta_required = metadata.get('required', '')
-                            if target_required == '必' and meta_required and '必' in meta_required:
-                                is_required = True
-                            elif target_required == '選' and meta_required and '選' in meta_required:
-                                is_required = True
-                            elif '必選修：' in document:
+                            # 必須使用 grade 和 required 欄位的對應關係
+                            grade = metadata.get('grade', '')
+                            required = metadata.get('required', '')
+                            
+                            # 如果 metadata 中沒有，從 document 中提取
+                            if not grade or not required:
+                                grade_match = re.search(r'年級：([^\n]+)', document)
                                 required_match = re.search(r'必選修：([^\n]+)', document)
+                                
+                                if grade_match:
+                                    grade = grade_match.group(1).strip()
                                 if required_match:
-                                    required_text = required_match.group(1).strip()
-                                    if target_required == '必':
-                                        is_required = '必' in required_text
-                                    elif target_required == '選':
-                                        is_required = '選' in required_text
-                                else:
-                                    is_required = False
+                                    required = required_match.group(1).strip()
+                            
+                            # 檢查 grade 和 required 的對應關係
+                            if grade and required:
+                                # 檢查是否有任何一個 grade 包含目標系所，且對應的 required 符合要求
+                                mapping = parse_grade_required_mapping(grade, required)
+                                found_match = False
+                                for g_item, r_item in mapping:
+                                    # 檢查 grade 是否包含目標系所
+                                    if target_dept:
+                                        if grade_has_target_dept(g_item, target_dept):
+                                            req_status = '必' if '必' in r_item else '選' if '選' in r_item else None
+                                            if req_status == target_required:
+                                                found_match = True
+                                                break
+                                    else:
+                                        # 沒有指定系所，直接檢查 required
+                                        req_status = '必' if '必' in r_item else '選' if '選' in r_item else None
+                                        if req_status == target_required:
+                                            found_match = True
+                                            break
+                                
+                                is_required = found_match
                             else:
                                 is_required = False
                 
@@ -845,6 +888,131 @@ class CourseQuerySystem:
                     relevant_courses = time_filtered[:n_results * 10]
                 else:
                     return f"很抱歉，沒有找到符合時間條件的課程。請嘗試調整查詢條件。"
+        
+        # 年級和必選修條件補強：若結果太少，再全量掃描一次 collection 依年級/系所/必選修補充
+        # 這確保不會漏掉任何符合條件的課程（特別是開課系所不同的課程，如「會計學」對「統計系2」）
+        # 當有指定年級和必選修時，如果過濾後的結果少於預期數量，進行全量掃描補強
+        if target_grade and need_required_filter and len(relevant_courses) < n_results * 2:
+            try:
+                total = self.rag_system.collection.count()
+                batch_size = 500
+                seen_ids = set()
+                for c in relevant_courses:
+                    md = c.get('metadata', {})
+                    seen_ids.add(md.get('serial', '') + md.get('schedule', ''))
+
+                def process_batch_for_grade_required(docs, metas):
+                    nonlocal relevant_courses, seen_ids
+                    for doc, md in zip(docs, metas):
+                        # 檢查年級匹配
+                        grade_text = md.get('grade', '')
+                        if not grade_text:
+                            continue
+                        
+                        # 使用 grade_has_target_dept 檢查系所
+                        if target_dept:
+                            if not grade_has_target_dept(grade_text, target_dept):
+                                continue
+                        
+                        # 檢查年級匹配（使用 grade_matches 的邏輯）
+                        mapping_json = md.get('grade_required_mapping', '')
+                        found_grade_match = False
+                        
+                        if mapping_json:
+                            try:
+                                mapping_data = json.loads(mapping_json)
+                                mapping = mapping_data.get('mapping', [])
+                                for grade_item, _ in mapping:
+                                    if grade_item == target_grade:
+                                        found_grade_match = True
+                                        break
+                                    elif grade_item.startswith(target_grade):
+                                        diff = grade_item[len(target_grade):].strip()
+                                        if len(diff) == 0 or \
+                                           (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']) or \
+                                           (len(diff) > 0 and not diff[0].isdigit()):
+                                            found_grade_match = True
+                                            break
+                            except:
+                                pass
+                        
+                        if not found_grade_match:
+                            # 使用傳統方式檢查
+                            tokens = re.split(r'[\\|,，/\\s]+', grade_text)
+                            for tk in tokens:
+                                if tk == target_grade:
+                                    found_grade_match = True
+                                    break
+                                elif tk.startswith(target_grade):
+                                    diff = tk[len(target_grade):].strip()
+                                    if len(diff) == 0 or \
+                                       (len(diff) == 1 and diff in ['A', 'B', 'C', 'D', 'E', 'F']):
+                                        found_grade_match = True
+                                        break
+                        
+                        if not found_grade_match:
+                            continue
+                        
+                        # 檢查必選修
+                        required = md.get('required', '')
+                        grade_required_status = None
+                        
+                        if mapping_json:
+                            try:
+                                course_dict = {'grade_required_mapping': mapping_json}
+                                all_matches = check_grades_required_from_json(course_dict, target_grade)
+                                if all_matches:
+                                    for _, req_status in all_matches:
+                                        if req_status == target_required:
+                                            grade_required_status = target_required
+                                            break
+                                    if grade_required_status is None:
+                                        grade_required_status = all_matches[0][1]
+                            except:
+                                pass
+                        
+                        if grade_required_status is None and grade_text and required:
+                            course_dict = {'grade': grade_text, 'required': required}
+                            grade_required_status = check_grade_required(course_dict, target_grade)
+                        
+                        if grade_required_status != target_required:
+                            continue
+                        
+                        # 去重
+                        key = md.get('serial', '') + md.get('schedule', '')
+                        if key in seen_ids:
+                            continue
+                        seen_ids.add(key)
+                        
+                        relevant_courses.append({
+                            'document': doc,
+                            'metadata': md,
+                            'distance': None,
+                            'similarity': 0.0,
+                            'embedding_score': 0.0,
+                            'bm25_score': 0.0,
+                            'hybrid_score': 0.0
+                        })
+                        
+                        if len(relevant_courses) >= n_results * 3:
+                            return True
+                    return False
+
+                # 分批取出
+                for offset in range(0, total, batch_size):
+                    all_results = self.rag_system.collection.get(
+                        include=['documents', 'metadatas'],
+                        limit=batch_size,
+                        offset=offset
+                    )
+                    docs = all_results.get('documents', [])
+                    metas = all_results.get('metadatas', [])
+                    if docs and metas:
+                        if process_batch_for_grade_required(docs, metas):
+                            break
+            except Exception as e:
+                # 如果補強失敗，繼續使用原有結果
+                pass
         
         # 時間條件補強：若結果太少，再全量掃描一次 collection 依時間/系所（與必修需求）補充
         if time_condition.get('day') or time_condition.get('period'):
