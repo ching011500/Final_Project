@@ -894,7 +894,8 @@ class CourseQuerySystem:
         # 當有指定年級和必選修時，進行全量掃描補強，確保不會漏掉任何符合條件的課程
         # 補強邏輯在過濾之後執行，直接添加到 relevant_courses，不需要再次過濾
         if target_grade and need_required_filter:
-            print(f"🔍 執行補強邏輯：target_grade={target_grade}, target_required={target_required}, 當前結果數={len(relevant_courses)}")
+            print(f"🔍 執行補強邏輯：target_grade={target_grade}, target_required={target_required}, target_dept={target_dept}, 當前結果數={len(relevant_courses)}")
+            print(f"   補強邏輯將全量掃描 collection，尋找符合條件的課程...")
             try:
                 total = self.rag_system.collection.count()
                 batch_size = 500
