@@ -230,6 +230,10 @@ class CourseQuerySystem:
                 else:
                     target_dept = None
         
+        # 特殊處理：如果查詢中包含「通識」，直接設置為「通識」
+        if not target_dept and '通識' in user_question:
+            target_dept = '通識'
+        
         # 如果仍未取得系所，嘗試使用動態載入的系所關鍵詞（省略「系」的口語）
         if not target_dept:
             # 使用從資料庫載入的系所關鍵字
@@ -1264,7 +1268,12 @@ class CourseQuerySystem:
         
         # 時間條件補強：若結果太少，再全量掃描一次 collection 依時間/系所（與必修需求）補充
         if time_condition.get('day') or time_condition.get('period'):
-            if len(relevant_courses) < n_results:
+            # 對於通識課程，總是進行全量掃描，確保找到所有符合條件的課程
+            should_enhance = len(relevant_courses) < n_results
+            if target_dept == '通識':
+                should_enhance = True  # 總是進行補強掃描
+                print(f"🔍 開始時間條件補強邏輯：target_dept=通識, 當前結果數={len(relevant_courses)}")
+            if should_enhance:
                 try:
                     total = self.rag_system.collection.count()
                     batch_size = 500
@@ -1282,16 +1291,23 @@ class CourseQuerySystem:
                             # 時間匹配
                             if not check_time_match(schedule, time_condition):
                                 continue
-                            # 系所匹配（若有）：必須同時滿足年級欄位和開課系所
+                            # 系所匹配（若有）：對於通識課程，檢查年級欄位是否包含「通識」即可
                             if target_dept:
                                 grade_text = md.get('grade', '')
                                 dept_text = md.get('dept', '')
-                                # 必須同時滿足：年級欄位中包含目標系所，且開課系所也要匹配
-                                grade_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
-                                dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
-                                # 必須同時滿足 grade_ok 和 dept_ok，避免誤匹配其他系開設的課程
-                                if not (grade_ok and dept_ok):
-                                    continue
+                                # 對於通識課程，檢查年級欄位是否包含「通識」即可
+                                # 因為通識課程可能由不同系所開設（例如「歷史系」、「體育」），但年級欄位中包含「通識」
+                                if target_dept == '通識':
+                                    grade_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
+                                    if not grade_ok:
+                                        continue
+                                else:
+                                    # 對於其他系所，必須同時滿足：年級欄位中包含目標系所，且開課系所也要匹配
+                                    grade_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
+                                    dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
+                                    # 必須同時滿足 grade_ok 和 dept_ok，避免誤匹配其他系開設的課程
+                                    if not (grade_ok and dept_ok):
+                                        continue
                             # 必修匹配（若有）
                             if need_required_filter and target_required:
                                 req = md.get('required', '')
@@ -1325,10 +1341,18 @@ class CourseQuerySystem:
                         metas = all_results.get('metadatas', [])
                         if docs and metas:
                             process_batch(docs, metas)
-                        if len(relevant_courses) >= n_results * 3:
+                        # 對於通識課程，不限制數量，確保找到所有符合條件的課程
+                        if target_dept != '通識' and len(relevant_courses) >= n_results * 3:
                             break
-                except Exception:
+                except Exception as e:
+                    # 打印錯誤信息以便調試
+                    print(f"⚠️ 時間條件補強邏輯執行失敗: {e}")
+                    import traceback
+                    traceback.print_exc()
                     pass
+                finally:
+                    if target_dept == '通識':
+                        print(f"🔍 時間條件補強邏輯完成：最終結果數={len(relevant_courses)}")
 
         # 3. 建立 context（相關課程資訊）
         # 如果有 target_grade，傳遞 target_grade 以便在 context 中顯示所有匹配的年級
@@ -1370,19 +1394,30 @@ class CourseQuerySystem:
                     grade_text = md.get('grade', '')
                     dept_text = md.get('dept', '')
                     grade_ok = grade_has_target_dept(grade_text, target_dept) if grade_text else False
-                    dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
+                    # 對於通識課程，需要特殊處理，因為開課系所可能是「通識」、「(進修)通識」、「語文通識」等
+                    if target_dept == '通識':
+                        dept_ok = '通識' in dept_text if dept_text else False
+                    else:
+                        dept_ok = (target_dept.replace('系', '') in dept_text) if dept_text else False
                     college_ok = any(kw in grade_text for kw in college_keywords) if grade_text else False
                     
-                    # 當有時間條件時，必須同時滿足：
-                    # 1. 年級欄位中包含目標系所（grade_ok）
-                    # 2. 開課系所也要匹配（dept_ok），避免顯示其他系開設但年級欄位中包含目標系所的課程
-                    # 或者學院級課程（college_ok）
-                    if grade_ok and dept_ok:
-                        # 年級欄位和開課系所都匹配，優先顯示
-                        filtered.append(c)
-                    elif grade_ok and college_ok:
-                        # 學院級課程（例如「電資院1」）也可以匹配
-                        filtered.append(c)
+                    # 當有時間條件時，對於通識課程，檢查年級欄位是否包含「通識」即可
+                    # 因為通識課程可能由不同系所開設（例如「歷史系」、「體育」），但年級欄位中包含「通識」
+                    if target_dept == '通識':
+                        if grade_ok:
+                            # 年級欄位中包含「通識」即可
+                            filtered.append(c)
+                    else:
+                        # 對於其他系所，必須同時滿足：
+                        # 1. 年級欄位中包含目標系所（grade_ok）
+                        # 2. 開課系所也要匹配（dept_ok），避免顯示其他系開設但年級欄位中包含目標系所的課程
+                        # 或者學院級課程（college_ok）
+                        if grade_ok and dept_ok:
+                            # 年級欄位和開課系所都匹配，優先顯示
+                            filtered.append(c)
+                        elif grade_ok and college_ok:
+                            # 學院級課程（例如「電資院1」）也可以匹配
+                            filtered.append(c)
                     # 不包含只有 grade_ok 或只有 dept_ok 的情況，避免誤匹配
                 if filtered:
                     relevant_courses = filtered
