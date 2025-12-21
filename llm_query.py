@@ -38,7 +38,7 @@ class CourseQuerySystem:
         if not api_key:
             raise ValueError("請設定 OPENAI_API_KEY 環境變數")
         self.openai_client = OpenAI(api_key=api_key)
-        
+    
         # 從資料庫載入所有系所簡稱
         self.dept_keywords = self._load_dept_keywords()
     
@@ -472,7 +472,7 @@ class CourseQuerySystem:
                 
                 # 1. 精確匹配完整系名 (e.g. "法律系" matches "法律系...")
                 if tk.startswith(target_dept):
-                    return True
+                        return True
                 
                 # 2. 匹配短版本 (e.g. "法律" matches "法律1", "法律法學組")
                 if tk.startswith(target_dept_short):
@@ -1030,7 +1030,7 @@ class CourseQuerySystem:
                 if relaxed:
                     relevant_courses = relaxed[:n_results * 10]
                 else:
-                    return f"很抱歉，沒有找到符合「{target_dept if target_dept else user_question}」的課程。請嘗試調整查詢條件。"
+                    return "查無課程 請重新輸入"
         else:
             # 沒有系所/年級/必修條件，但有時間條件時也要過濾時間
             if time_condition.get('day') or time_condition.get('period'):
@@ -1043,7 +1043,7 @@ class CourseQuerySystem:
                 if time_filtered:
                     relevant_courses = time_filtered[:n_results * 10]
                 else:
-                    return f"很抱歉，沒有找到符合時間條件的課程。請嘗試調整查詢條件。"
+                    return "查無課程 請重新輸入"
         
         # 年級和必選修條件補強：若結果太少，再全量掃描一次 collection 依年級/系所/必選修補充
         # 這確保不會漏掉任何符合條件的課程（特別是開課系所不同的課程，如「中級會計學」對「統計系3」）
@@ -1516,7 +1516,7 @@ class CourseQuerySystem:
        ```
        （以此類推，顯示所有4筆）
    
-   - 只有在「相關課程資料」中完全沒有任何符合條件的課程時，才告訴使用者沒有找到。
+   - 只有在「相關課程資料」中完全沒有任何符合條件的課程時，請回答「查無課程 請重新輸入」。
   
    - 可以根據課程限制、選課人數等資訊提供建議。
    
@@ -1683,9 +1683,9 @@ class CourseQuerySystem:
                         pass
                 
                 if status == '必':
-                    context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
+                        context_parts.append(f"✅ 對於 {target_grade}，這是必修課程")
                 elif status == '選':
-                    context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
+                        context_parts.append(f"📝 對於 {target_grade}，這是選修課程")
                 elif show_required:
                     context_parts.append(f"必選修：{show_required}")
             
@@ -1750,13 +1750,13 @@ class CourseQuerySystem:
                     schedule = m.group(1).strip()
             
             result.append({
-                'name': name,
-                'schedule': schedule,
-                'dept': dept,
+                    'name': name,
+                    'schedule': schedule,
+                    'dept': dept,
                 'serials': [serial] if serial else [],
                 'teachers': {teacher} if teacher else set(),
-                'required': required,
-                'grade': grade,
+                    'required': required,
+                    'grade': grade,
                 'documents': [document],
                 'grade_required_mapping': mapping_json
             })
