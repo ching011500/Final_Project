@@ -196,21 +196,36 @@ class CourseQuerySystem:
         
         # 如果沒有從年級中提取到系所，嘗試直接從查詢中提取
         if not target_dept:
-            # 先嘗試匹配「XX系」格式，但要排除時間相關的詞彙
-            # 排除時間關鍵詞：週、周、星期、禮拜、早上、下午、晚上等
-            dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+系)', user_question)
+            # 先移除常見的問句詞彙和時間詞彙，然後再匹配系所
+            # 移除問句詞彙：有什麼、哪些、什麼、查詢、找、幫我、請等
+            cleaned_query = user_question
+            question_words = ['有什麼', '哪些', '什麼', '查詢', '找', '幫我', '請', '的', '課程', '課']
+            for qw in question_words:
+                cleaned_query = cleaned_query.replace(qw, ' ')
+            
+            # 移除時間相關詞彙
+            time_words = ['週一', '週二', '週三', '週四', '週五', '週六', '週日', 
+                         '周一', '周二', '周三', '周四', '周五', '周六', '周日',
+                         '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日',
+                         '禮拜一', '禮拜二', '禮拜三', '禮拜四', '禮拜五', '禮拜六', '禮拜日',
+                         '早上', '上午', '下午', '晚上', '夜間', 'AM', 'PM']
+            for tw in time_words:
+                cleaned_query = cleaned_query.replace(tw, ' ')
+            
+            # 現在匹配系所（只匹配簡短的系所名稱，通常是1-4個字）
+            dept_pattern_match = re.search(r'([^\s]{1,4}系)', cleaned_query)
             if dept_pattern_match:
                 target_dept = dept_pattern_match.group(1).strip()
-                # 再次檢查，確保不是時間相關的詞彙
-                if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                # 再次檢查，確保不是時間相關的詞彙或問句詞彙
+                if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間', '有什麼', '哪些', '什麼']):
                     target_dept = None
             else:
                 # 嘗試匹配「XX碩」格式（例如「資工碩一」）
-                dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+碩)', user_question)
+                dept_pattern_match = re.search(r'([^\s]{1,4}碩)', cleaned_query)
                 if dept_pattern_match:
                     target_dept = dept_pattern_match.group(1).strip()
-                    # 再次檢查，確保不是時間相關的詞彙
-                    if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                    # 再次檢查，確保不是時間相關的詞彙或問句詞彙
+                    if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間', '有什麼', '哪些', '什麼']):
                         target_dept = None
                 else:
                     target_dept = None
@@ -309,20 +324,35 @@ class CourseQuerySystem:
         
         # 確認系所名稱（如果問題中有「XX系」或「XX碩」）
         if not target_dept:
-            # 排除時間相關的詞彙
-            dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+系)', user_question)
+            # 先移除常見的問句詞彙和時間詞彙，然後再匹配系所
+            cleaned_query = user_question
+            question_words = ['有什麼', '哪些', '什麼', '查詢', '找', '幫我', '請', '的', '課程', '課']
+            for qw in question_words:
+                cleaned_query = cleaned_query.replace(qw, ' ')
+            
+            # 移除時間相關詞彙
+            time_words = ['週一', '週二', '週三', '週四', '週五', '週六', '週日', 
+                         '周一', '周二', '周三', '周四', '周五', '周六', '周日',
+                         '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日',
+                         '禮拜一', '禮拜二', '禮拜三', '禮拜四', '禮拜五', '禮拜六', '禮拜日',
+                         '早上', '上午', '下午', '晚上', '夜間', 'AM', 'PM']
+            for tw in time_words:
+                cleaned_query = cleaned_query.replace(tw, ' ')
+            
+            # 現在匹配系所（只匹配簡短的系所名稱，通常是1-4個字）
+            dept_pattern_match = re.search(r'([^\s]{1,4}系)', cleaned_query)
             if dept_pattern_match:
                 target_dept = dept_pattern_match.group(1).strip()
-                # 再次檢查，確保不是時間相關的詞彙
-                if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                # 再次檢查，確保不是時間相關的詞彙或問句詞彙
+                if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間', '有什麼', '哪些', '什麼']):
                     target_dept = None
             else:
                 # 嘗試匹配「XX碩」格式（例如「資工碩一」）
-                dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+碩)', user_question)
+                dept_pattern_match = re.search(r'([^\s]{1,4}碩)', cleaned_query)
                 if dept_pattern_match:
                     target_dept = dept_pattern_match.group(1).strip()
-                    # 再次檢查，確保不是時間相關的詞彙
-                    if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                    # 再次檢查，確保不是時間相關的詞彙或問句詞彙
+                    if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間', '有什麼', '哪些', '什麼']):
                         target_dept = None
         
         # 檢查是否需要過濾必修課程
