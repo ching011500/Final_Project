@@ -37,6 +37,91 @@ class CourseQuerySystem:
         if not api_key:
             raise ValueError("請設定 OPENAI_API_KEY 環境變數")
         self.openai_client = OpenAI(api_key=api_key)
+        
+        # 從資料庫載入所有系所簡稱
+        self.dept_keywords = self._load_dept_keywords()
+    
+    def _load_dept_keywords(self) -> set:
+        """
+        從資料庫載入所有系所簡稱關鍵字
+        
+        Returns:
+            系所簡稱關鍵字集合
+        """
+        import sqlite3
+        dept_keywords = set()
+        
+        try:
+            db_path = self.rag_system.db_path
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            
+            # 獲取所有系所
+            cur.execute('SELECT DISTINCT name FROM departments WHERE name IS NOT NULL AND name != "" ORDER BY name')
+            all_depts = [row[0] for row in cur.fetchall()]
+            
+            # 如果沒有 departments 表，嘗試從 courses 表獲取
+            if not all_depts:
+                cur.execute('SELECT DISTINCT dept FROM courses WHERE dept IS NOT NULL AND dept != "" ORDER BY dept')
+                all_depts = [row[0] for row in cur.fetchall()]
+            
+            # 提取系所簡稱
+            for dept in all_depts:
+                # 移除前綴（如「(進修)」）
+                clean_dept = re.sub(r'^\([^)]+\)', '', dept)
+                
+                # 移除後綴（如「系」、「碩」、「博」、「碩職」等）
+                base = re.sub(r'(系|碩|博|碩職|碩士班|學位學程|產碩專班|中心|學院|學程)$', '', clean_dept)
+                
+                # 如果 base 太長（超過4個字），取前2-3個字作為簡稱
+                if len(base) > 4:
+                    # 嘗試提取關鍵字（通常是前2-3個字）
+                    if len(base) >= 2:
+                        dept_keywords.add(base[:2])
+                    if len(base) >= 3:
+                        dept_keywords.add(base[:3])
+                else:
+                    dept_keywords.add(base)
+                
+                # 也加入完整名稱（去除前綴和後綴）
+                if len(base) <= 6:
+                    dept_keywords.add(base)
+            
+            # 過濾掉太短或無意義的關鍵字
+            dept_keywords = {kw for kw in dept_keywords if len(kw) >= 2 and not kw.isdigit()}
+            
+            conn.close()
+        except Exception as e:
+            # 如果載入失敗，使用預設的常見系所簡稱
+            print(f"⚠️ 載入系所關鍵字失敗: {e}，使用預設列表")
+            dept_keywords = {
+                '統計', '資工', '通訊', '電機', '經濟', '法律', '企管', '社工', '公行', 
+                '不動', '休運', '中文', '外語', '會計', '財政', '金融', '歷史', '行政',
+                '師培', '體育', '通識', 'AI聯盟', '北科大', '北醫大'
+            }
+        
+        return dept_keywords
+    
+    def _has_dept_keyword(self, text: str) -> bool:
+        """
+        檢查文本中是否包含系所關鍵字
+        
+        Args:
+            text: 要檢查的文本
+            
+        Returns:
+            是否包含系所關鍵字
+        """
+        # 先檢查標準格式（XX系、XX碩）
+        if re.search(r'\S+系|\S+碩', text):
+            return True
+        
+        # 檢查是否包含任何系所簡稱
+        for keyword in self.dept_keywords:
+            if keyword in text:
+                return True
+        
+        return False
     
     def query(self, user_question: str, n_results: int = 10) -> str:
         """
@@ -61,15 +146,26 @@ class CourseQuerySystem:
             greet_kw = ['嗨', 'hi', 'hello', '哈囉', '你好', '您好', '早安', '午安', '晚安']
             if any(k in text for k in greet_kw):
                 return "嗨！想查課程、教室或選課資訊嗎？可以直接輸入「系所 + 時間」或「課程名稱」。"
-            # 課程資訊/選課
-            course_kw = ['課程資訊', '選課', '加退選', '加選', '退選', '選修', '必修']
-            if any(k in text for k in course_kw):
+            
+            # 檢查是否為實際的課程查詢（包含系所名稱或年級）
+            # 如果包含系所或年級關鍵詞，則視為實際查詢，不返回提示
+            has_dept = self._has_dept_keyword(text)
+            has_grade = bool(re.search(r'[一二三四1234]|大[一二三四]|碩[一二三]', text))
+            
+            # 課程資訊/選課（僅當沒有系所或年級時才返回提示）
+            course_kw = ['課程資訊', '選課', '加退選', '加選', '退選']
+            if any(k in text for k in course_kw) and not (has_dept or has_grade):
                 return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
+            
+            # 如果只有「必修」或「選修」但沒有系所或年級，可能是詢問一般性問題
+            if ('必修' in text or '選修' in text) and not (has_dept or has_grade):
+                return "可以直接問我「系所/年級/必選修/時間」組合，例如「通訊系禮拜三早上有什麼課」或「資工系大三必修」。想找特定課程也能輸入課名或代碼。"
+            
             # 教室地點
-            if '教室' in text:
+            if '教室' in text and not (has_dept or has_grade):
                 return "教室會寫在課程的上課時間旁，如「每週三2~4 電4F08」。你可以提供課程名稱或時間，我幫你查到對應教室。"
             # 校園基本對話
-            if '課程代碼' in text or '課號' in text:
+            if ('課程代碼' in text or '課號' in text) and not (has_dept or has_grade):
                 return "你可以輸入課程名稱，我會列出課程代碼；也能直接輸入課程代碼來查時段與教師。"
             return None
         
