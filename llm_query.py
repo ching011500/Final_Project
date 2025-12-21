@@ -196,15 +196,22 @@ class CourseQuerySystem:
         
         # 如果沒有從年級中提取到系所，嘗試直接從查詢中提取
         if not target_dept:
-            # 先嘗試匹配「XX系」格式
-            dept_pattern_match = re.search(r'(\S+系)', user_question)
+            # 先嘗試匹配「XX系」格式，但要排除時間相關的詞彙
+            # 排除時間關鍵詞：週、周、星期、禮拜、早上、下午、晚上等
+            dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+系)', user_question)
             if dept_pattern_match:
-                target_dept = dept_pattern_match.group(1)
+                target_dept = dept_pattern_match.group(1).strip()
+                # 再次檢查，確保不是時間相關的詞彙
+                if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                    target_dept = None
             else:
                 # 嘗試匹配「XX碩」格式（例如「資工碩一」）
-                dept_pattern_match = re.search(r'(\S+碩)', user_question)
+                dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+碩)', user_question)
                 if dept_pattern_match:
-                    target_dept = dept_pattern_match.group(1)
+                    target_dept = dept_pattern_match.group(1).strip()
+                    # 再次檢查，確保不是時間相關的詞彙
+                    if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                        target_dept = None
                 else:
                     target_dept = None
         
@@ -302,14 +309,21 @@ class CourseQuerySystem:
         
         # 確認系所名稱（如果問題中有「XX系」或「XX碩」）
         if not target_dept:
-            dept_pattern_match = re.search(r'(\S+系)', user_question)
+            # 排除時間相關的詞彙
+            dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+系)', user_question)
             if dept_pattern_match:
-                target_dept = dept_pattern_match.group(1)
+                target_dept = dept_pattern_match.group(1).strip()
+                # 再次檢查，確保不是時間相關的詞彙
+                if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                    target_dept = None
             else:
                 # 嘗試匹配「XX碩」格式（例如「資工碩一」）
-                dept_pattern_match = re.search(r'(\S+碩)', user_question)
+                dept_pattern_match = re.search(r'([^週周星期禮拜早上下午晚上夜間AMPM\d\s]+碩)', user_question)
                 if dept_pattern_match:
-                    target_dept = dept_pattern_match.group(1)
+                    target_dept = dept_pattern_match.group(1).strip()
+                    # 再次檢查，確保不是時間相關的詞彙
+                    if any(kw in target_dept for kw in ['週', '周', '星期', '禮拜', '早上', '下午', '晚上', '夜間']):
+                        target_dept = None
         
         # 檢查是否需要過濾必修課程
         need_required_filter = '必修' in user_question or '選修' in user_question
