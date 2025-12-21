@@ -891,9 +891,10 @@ class CourseQuerySystem:
         
         # 年級和必選修條件補強：若結果太少，再全量掃描一次 collection 依年級/系所/必選修補充
         # 這確保不會漏掉任何符合條件的課程（特別是開課系所不同的課程，如「中級會計學」對「統計系3」）
-        # 當有指定年級和必選修時，進行全量掃描補強，確保不會漏掉任何符合條件的課程
+        # 當有指定年級時，進行全量掃描補強，確保不會漏掉任何符合條件的課程
+        # 如果有指定必選修，則只添加符合必選修條件的課程；如果沒有指定，則添加所有符合年級的課程
         # 補強邏輯在過濾之後執行，直接添加到 relevant_courses，不需要再次過濾
-        if target_grade and need_required_filter:
+        if target_grade:
             print(f"🔍 執行補強邏輯：target_grade={target_grade}, target_required={target_required}, target_dept={target_dept}, 當前結果數={len(relevant_courses)}")
             print(f"   補強邏輯將全量掃描 collection，尋找符合條件的課程...")
             try:
@@ -986,7 +987,8 @@ class CourseQuerySystem:
                             course_dict = {'grade': grade_text, 'required': required}
                             grade_required_status = check_grade_required(course_dict, target_grade)
                         
-                        if grade_required_status != target_required:
+                        # 如果有指定必選修要求，檢查是否符合；如果沒有指定，則接受所有課程
+                        if need_required_filter and grade_required_status != target_required:
                             if '中級會計' in course_name:
                                 print(f"      ❌ 必選修匹配失敗: {course_name}, grade_required_status={grade_required_status}, target_required={target_required}")
                             continue
