@@ -1008,12 +1008,38 @@ class CourseQuerySystem:
                         if grade_required_status is None and grade_text and required:
                             course_dict = {'grade': grade_text, 'required': required}
                             grade_required_status = check_grade_required(course_dict, target_grade)
+                            if '中級會計' in course_name or '計算機結構' in course_name:
+                                print(f"      check_grade_required 結果: {grade_required_status}, grade_text={grade_text}, required={required}, target_grade={target_grade}")
                         
                         # 如果有指定必選修要求，檢查是否符合；如果沒有指定，則接受所有課程
-                        if need_required_filter and grade_required_status != target_required:
-                            if '中級會計' in course_name or '計算機結構' in course_name:
-                                print(f"      ❌ 必選修匹配失敗: {course_name}, grade_required_status={grade_required_status}, target_required={target_required}")
-                            continue
+                        # 修正：如果 grade_required_status 是 None，表示沒有找到匹配，應該跳過
+                        # 但如果找到了 grade_match，應該再檢查一次 required 欄位
+                        if need_required_filter and target_required:
+                            if grade_required_status is None:
+                                # 如果 grade_required_status 是 None，但已經找到了 grade_match，再檢查一次
+                                if grade_text and required:
+                                    # 直接檢查 grade_text 中是否包含 target_grade，以及對應的 required 是否匹配
+                                    tokens = re.split(r'[\\|,，/\\s]+', grade_text)
+                                    req_tokens = re.split(r'[\\|,，/\\s]+', required)
+                                    for i, tk in enumerate(tokens):
+                                        if tk == target_grade or (tk.startswith(target_grade) and len(tk) > len(target_grade) and tk[len(target_grade)] in 'ABCDEF'):
+                                            if i < len(req_tokens):
+                                                req_status = req_tokens[i]
+                                                if '選' in req_status and target_required == '選':
+                                                    grade_required_status = '選'
+                                                    if '中級會計' in course_name or '計算機結構' in course_name:
+                                                        print(f"      ✓ 直接匹配必選修: {course_name}, req_status={req_status}")
+                                                    break
+                                                elif '必' in req_status and target_required == '必':
+                                                    grade_required_status = '必'
+                                                    if '中級會計' in course_name or '計算機結構' in course_name:
+                                                        print(f"      ✓ 直接匹配必選修: {course_name}, req_status={req_status}")
+                                                    break
+                            
+                            if grade_required_status != target_required:
+                                if '中級會計' in course_name or '計算機結構' in course_name:
+                                    print(f"      ❌ 必選修匹配失敗: {course_name}, grade_required_status={grade_required_status}, target_required={target_required}")
+                                continue
                         
                         # 去重
                         key = md.get('serial', '') + md.get('schedule', '')
@@ -1032,6 +1058,8 @@ class CourseQuerySystem:
                             'bm25_score': 0.0,
                             'hybrid_score': 0.0
                         })
+                        
+                        found_count += 1
                         
                         # 打印找到的課程信息以便調試
                         course_name = md.get('name', '')
