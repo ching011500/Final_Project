@@ -905,6 +905,7 @@ class CourseQuerySystem:
 
                 def process_batch_for_grade_required(docs, metas):
                     nonlocal relevant_courses, seen_ids
+                    found_count = 0
                     for doc, md in zip(docs, metas):
                         # 檢查年級匹配
                         grade_text = md.get('grade', '')
@@ -915,6 +916,13 @@ class CourseQuerySystem:
                         if target_dept:
                             if not grade_has_target_dept(grade_text, target_dept):
                                 continue
+                        
+                        # 調試：檢查是否找到「中級會計學」
+                        course_name = md.get('name', '')
+                        course_serial = md.get('serial', '')
+                        if '中級會計' in course_name:
+                            print(f"  🔍 找到中級會計學相關課程: {course_name} ({course_serial}), grade_text={grade_text}")
+                            print(f"      grade_has_target_dept: {grade_has_target_dept(grade_text, target_dept) if target_dept else 'N/A'}")
                         
                         # 檢查年級匹配（使用 grade_matches 的邏輯）
                         mapping_json = md.get('grade_required_mapping', '')
@@ -978,6 +986,8 @@ class CourseQuerySystem:
                             grade_required_status = check_grade_required(course_dict, target_grade)
                         
                         if grade_required_status != target_required:
+                            if '中級會計' in course_name:
+                                print(f"      ❌ 必選修匹配失敗: {course_name}, grade_required_status={grade_required_status}, target_required={target_required}")
                             continue
                         
                         # 去重
