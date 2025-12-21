@@ -207,21 +207,17 @@ class CourseQuerySystem:
                 else:
                     target_dept = None
         
-        # 如果仍未取得系所，嘗試使用常見系所關鍵詞（省略「系」的口語）
+        # 如果仍未取得系所，嘗試使用動態載入的系所關鍵詞（省略「系」的口語）
         if not target_dept:
-            dept_keywords = {
-                '通訊': '通訊系',
-                '資工': '資工系',
-                '電機': '電機系',
-                '統計': '統計系',
-                '經濟': '經濟系',
-                '法': '法律系',
-                '財法': '財法系',
-                '企管': '企管系',
-            }
-            for kw, dept_name in dept_keywords.items():
+            # 使用從資料庫載入的系所關鍵字
+            for kw in self.dept_keywords:
+                # 檢查關鍵字是否在查詢中
                 if kw in user_question:
-                    target_dept = dept_name
+                    # 如果關鍵字不包含「系」，加上「系」
+                    if '系' not in kw and '碩' not in kw:
+                        target_dept = f"{kw}系"
+                    else:
+                        target_dept = kw
                     break
         
         # 構建搜尋查詢（使用多個關鍵詞組合提高召回率）
@@ -663,6 +659,27 @@ class CourseQuerySystem:
                                                 break
                             except:
                                 pass
+                        
+                        # 如果 mapping_json 存在但 all_matches 為空，改用傳統方式檢查
+                        if not all_matches and grade_required is None:
+                            # 使用傳統方式檢查
+                            grade = metadata.get('grade', '')
+                            required = metadata.get('required', '')
+                            
+                            # 如果 metadata 中沒有，從 document 中提取
+                            if not grade or not required:
+                                grade_match = re.search(r'年級：([^\n]+)', document)
+                                required_match = re.search(r'必選修：([^\n]+)', document)
+                                
+                                if grade_match:
+                                    grade = grade_match.group(1).strip()
+                                if required_match:
+                                    required = required_match.group(1).strip()
+                            
+                            # 如果有 target_grade，檢查該 grade 的必選修狀態
+                            if grade and required:
+                                course_dict = {'grade': grade, 'required': required}
+                                grade_required = check_grade_required(course_dict, target_grade)
 
                     elif target_grade:
                         # 傳統方式：從 metadata 或 document 中取得 grade 和 required
